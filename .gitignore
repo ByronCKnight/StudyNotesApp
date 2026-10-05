@@ -1,0 +1,22 @@
+*.iml
+.gradle
+.kotlin
+/local.properties
+/.idea
+.DS_Store
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Release signing material — never commit
+keystore.properties
+*.jks
+*.keystore
+
+# Built APKs copied for distribution
+/dist
+
+# QA artefacts (screenshots, pulled files)
+/qa

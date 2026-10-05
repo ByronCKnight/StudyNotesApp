@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Annotated PDF exports are written to cacheDir/exports before being shared. -->
+    <cache-path name="exports" path="exports/" />
+    <!-- Library folder (shared Documents/StudyNotes, or the private fallback) for "Share original". -->
+    <external-path name="library" path="Documents/StudyNotes/" />
+    <external-files-path name="private_library" path="StudyNotes/" />
+    <files-path name="internal_library" path="StudyNotes/" />
+</paths>
