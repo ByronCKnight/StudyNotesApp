@@ -1,0 +1,28 @@
+*.iml
+.gradle
+.kotlin
+/local.properties
+/.idea
+.DS_Store
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Release signing material — never commit
+keystore.properties
+*.jks
+*.keystore
+
+# Built APKs copied for distribution
+/dist
+
+# Per-agent isolated workspaces used during development
+/.ws
+
+# QA artefacts (screenshots, pulled files)
+/qa
+
+# Filtered build log written by tools/agent-build.sh
+.last-build.log
