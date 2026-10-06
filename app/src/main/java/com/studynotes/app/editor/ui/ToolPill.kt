@@ -252,6 +252,9 @@ private fun ToolOptionsCard(
                     })
                     if (supportsTextSelection) {
                         OptionSwitch("Snap to text", toolState.snapToText) { v -> onUpdateTools { it.copy(snapToText = v) } }
+                        OptionSwitch("Text only", toolState.snapOnly, enabled = toolState.snapToText) { v ->
+                            onUpdateTools { it.copy(snapOnly = v) }
+                        }
                     }
                     OptionSwitch("Straight lines", toolState.straightHighlighter) { v ->
                         onUpdateTools { it.copy(straightHighlighter = v) }
@@ -272,18 +275,24 @@ private fun ToolOptionsCard(
     }
 }
 
+/** A labelled switch row; [enabled] false greys it out (an option that depends on another one). */
 @Composable
-private fun OptionSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun OptionSwitch(label: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange)
             .padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = null)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (enabled) Color.Unspecified else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            modifier = Modifier.weight(1f),
+        )
+        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
     }
 }
 
