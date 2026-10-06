@@ -362,7 +362,11 @@ Contracts in the files. PdfBox-Android 2.0.27.0 (PDFBox 2.0 API — no `Loader.l
   stylus draws; fingers scroll and zoom." Help line: "Lenovo Tab Pen Plus: keep Bluetooth on so the
   pen works."
 - Autosave: segmented 1 / 2 / 5 / 10 min.
-- About: version.
+- About: version, "Developed by WireByte Technologies", copyright notice ("© 2026 WireByte
+  Technologies. All rights reserved.", the year becomes a range after 2026). Company details come
+  from `Publisher` (`app/.../Publisher.kt`): name, first copyright year, and nullable `logo`,
+  `website`, `supportEmail` that the section shows only once set. Repo root `NOTICE` carries the
+  same notice.
 
 ## 11. Editor (`editor/`)
 
