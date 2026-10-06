@@ -1,5 +1,6 @@
 package com.studynotes.app.library.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -25,16 +27,20 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.studynotes.app.BuildConfig
+import com.studynotes.app.Publisher
 import com.studynotes.app.data.Settings
 
-/** Settings bottom sheet: library folder, pen & touch, autosave interval and version. */
+/** Settings bottom sheet: library folder, pen & touch, autosave interval, version and publisher. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsSheet(
@@ -154,7 +160,7 @@ fun SettingsSheet(
             }
 
             Section("About") {
-                Text("StudyNotes ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyLarge)
+                AboutPublisher()
             }
         }
     }
@@ -164,6 +170,47 @@ private fun folderDescription(isPublic: Boolean, hasFolderAccess: Boolean): Stri
     isPublic && hasFolderAccess -> "Visible in the Files app and over USB from a computer."
     isPublic -> "Files added by a computer or another app stay hidden until you allow access."
     else -> "Only StudyNotes can see these files."
+}
+
+/**
+ * Version, publisher and copyright notice. The logo, website and support address appear only once
+ * they are filled in on [Publisher].
+ */
+@Composable
+private fun AboutPublisher() {
+    val uriHandler = LocalUriHandler.current
+    Publisher.logo?.let { logo ->
+        Image(
+            painter = painterResource(logo),
+            contentDescription = Publisher.NAME,
+            modifier = Modifier
+                .heightIn(max = 48.dp)
+                .padding(bottom = 12.dp),
+        )
+    }
+    Text("StudyNotes ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyLarge)
+    Text(
+        text = "Developed by ${Publisher.NAME}",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    Text(
+        text = "${Publisher.copyright()}. ${Publisher.RIGHTS}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    val links = listOfNotNull(
+        Publisher.website?.let { "Website" to it },
+        Publisher.supportEmail?.let { "Contact" to "mailto:$it" },
+    )
+    if (links.isNotEmpty()) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            links.forEach { (label, uri) ->
+                TextButton(onClick = { uriHandler.openUri(uri) }) { Text(label) }
+            }
+        }
+    }
 }
 
 @Composable
