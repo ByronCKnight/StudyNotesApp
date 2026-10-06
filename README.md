@@ -121,3 +121,10 @@ store a new one and publish a new release. A build without a token (a local debu
 checks for updates. People need the first APK from you directly; from then on the app updates itself.
 
 Architecture notes for developers are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Copyright
+
+StudyNotes is developed and published by **WireByte Technologies**. © 2026 WireByte Technologies.
+All rights reserved; see [NOTICE](NOTICE). Company details shown in the app live in one place,
+`app/src/main/java/com/studynotes/app/Publisher.kt` (name, copyright year, and slots for the logo,
+website and support address), and appear under **Settings › About**.
