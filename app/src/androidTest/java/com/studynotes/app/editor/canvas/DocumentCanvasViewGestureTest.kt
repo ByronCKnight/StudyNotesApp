@@ -26,6 +26,7 @@ import com.studynotes.app.testutil.Fixtures
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -276,6 +277,39 @@ class DocumentCanvasViewGestureTest {
         assertEquals("right", preview[2], stroke.points[2], 0.01f)
         assertEquals("centre line", (preview[1] + preview[3]) / 2f, stroke.points[1], 0.01f)
         assertEquals("band height", preview[3] - preview[1], stroke.width, 0.01f)
+    }
+
+    @Test
+    fun snapOnly_dragWhereThereIsNoText_highlightsNothing() {
+        assumeTrue("snap to text needs text selection (MODERN backend)", handle.supportsTextSelection)
+        // Text only is the default with snap to text.
+        configure(ToolState(tool = Tool.HIGHLIGHTER, snapToText = true), stylusOnly = true)
+        // The top margin of page 1: the title's cap height starts near y = 57, nothing lies above it.
+        val y = 30f
+        val g = Gesture(SystemClock.uptimeMillis()).down(PEN, STYLUS, geo.toView(100f, y)).drag(PEN, geo.toView(400f, y), steps = 20)
+        dispatch(g)
+        waitUntil("first selection answer", timeoutMs = 5_000) { onMain { view.snapAnswered } }
+        assertNull("no text, no preview", onMain { view.snapPreviewRects })
+
+        dispatch(g.up(PEN))
+        // Give a late snap result every chance to arrive before concluding nothing was added.
+        waitUntil("snap settled", timeoutMs = 5_000) { onMain { !view.hasAwaitingSnap } }
+        assertTrue("a highlight that found no text is dropped", listener.added.isEmpty())
+    }
+
+    @Test
+    fun snapOnlyOff_dragWhereThereIsNoText_keepsTheFreehandStroke() {
+        assumeTrue("snap to text needs text selection (MODERN backend)", handle.supportsTextSelection)
+        val tools = ToolState(tool = Tool.HIGHLIGHTER, snapToText = true, snapOnly = false)
+        configure(tools, stylusOnly = true)
+        val y = 30f
+        dispatch(Gesture(SystemClock.uptimeMillis()).down(PEN, STYLUS, geo.toView(100f, y)).drag(PEN, geo.toView(400f, y), steps = 20).up(PEN))
+        waitUntil("freehand highlight", timeoutMs = 5_000) { listener.added.isNotEmpty() }
+
+        val stroke = listener.added.single().strokes.single()
+        assertFalse("not snapped: round caps", stroke.flatCaps)
+        assertEquals(tools.highlighterWidth, stroke.width, 0f)
+        assertBounds(stroke, minX = 100f, maxX = 400f, minY = y, maxY = y)
     }
 
     @Test

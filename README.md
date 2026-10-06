@@ -29,7 +29,7 @@ Your highlights and notes are stored next to the documents in a hidden `.studyno
 | Tool | What it does |
 |---|---|
 | ✋ View | Scroll and zoom without marking the page |
-| Highlighter | Translucent marker; text stays readable. Hold the pen still at the end of a stroke to straighten it. *Snap to text* (on by default) shows the text you are selecting as a grey selection while you drag, then highlights exactly that, lined up with the text and covering whole words; *Straight lines* is in its options too |
+| Highlighter | Translucent marker; text stays readable. Hold the pen still at the end of a stroke to straighten it. *Snap to text* (on by default) shows the text you are selecting as a grey selection while you drag, then highlights exactly that, lined up with the text and covering whole words. *Text only* (on by default) drops a highlight that finds no text instead of leaving a freehand mark; turn it off to mark blank areas and pictures. *Straight lines* is in its options too |
 | Pen | Handwriting and drawing |
 | Note | Tap the page to pin a typed sticky note; tap a note to edit it, drag to move it |
 | Eraser | Rub over highlights or ink to remove them |
