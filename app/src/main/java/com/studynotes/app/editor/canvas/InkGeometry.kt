@@ -2,6 +2,7 @@ package com.studynotes.app.editor.canvas
 
 import com.studynotes.app.model.InkTool
 import com.studynotes.app.model.Stroke
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -385,6 +386,31 @@ object InkGeometry {
         return snappedStrokes(swappedRects, color, groupId, newId).map { s ->
             Stroke(s.id, s.tool, s.color, s.width, swapAxes(s.points), s.flatCaps, s.groupId)
         }
+    }
+
+    /**
+     * The area each snapped stroke (from [snapStrokes]) will cover, as interleaved l, t, r, b per
+     * stroke: the band of its width around its two-point segment. Drawn as the selection preview
+     * while the highlight is being dragged, so what is shown is exactly what the lift commits.
+     */
+    fun snapPreviewRects(strokes: List<Stroke>): FloatArray {
+        val out = FloatArray(strokes.size * 4)
+        for (i in strokes.indices) {
+            val s = strokes[i]
+            val p = s.points
+            val x0 = p[0]
+            val y0 = p[1]
+            val x1 = if (p.size >= 4) p[p.size - 2] else x0
+            val y1 = if (p.size >= 4) p[p.size - 1] else y0
+            val half = s.width / 2f
+            // The band runs along the segment: across it the stroke is as wide as its width.
+            val horizontal = abs(x1 - x0) >= abs(y1 - y0)
+            out[4 * i] = min(x0, x1) - if (horizontal) 0f else half
+            out[4 * i + 1] = min(y0, y1) - if (horizontal) half else 0f
+            out[4 * i + 2] = max(x0, x1) + if (horizontal) 0f else half
+            out[4 * i + 3] = max(y0, y1) + if (horizontal) half else 0f
+        }
+        return out
     }
 
     /**

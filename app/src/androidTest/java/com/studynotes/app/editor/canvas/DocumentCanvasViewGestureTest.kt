@@ -27,6 +27,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -248,6 +249,33 @@ class DocumentCanvasViewGestureTest {
             g.drag(PEN, geo.toView(x, yk), steps = 4)
         }
         return g
+    }
+
+    @Test
+    fun snapToText_dragPreviewsTheSelection_liftHighlightsExactlyThat() {
+        assumeTrue("snap to text needs text selection (MODERN backend)", handle.supportsTextSelection)
+        configure(ToolState(tool = Tool.HIGHLIGHTER, snapToText = true), stylusOnly = true)
+        val y = 66f
+        assumeTrue("title must be on screen", geo.visibleHeightPt > 100f)
+        val g = Gesture(SystemClock.uptimeMillis()).down(PEN, STYLUS, geo.toView(62f, y)).drag(PEN, geo.toView(238f, y), steps = 20)
+        dispatch(g)
+        waitUntil("selection preview while dragging", timeoutMs = 5_000) { view.snapPreviewRects != null }
+        val preview = onMain { view.snapPreviewRects!!.copyOf() }
+        assertTrue("nothing is committed before the pen lifts", listener.added.isEmpty())
+        assertEquals("the title is one line: ${preview.toList()}", 4, preview.size)
+        assertTrue("preview starts at the first glyph: ${preview.toList()}", preview[0] in 52f..64f)
+        assertTrue("preview ends at the end of the last word touched: ${preview.toList()}", preview[2] in 282f..298f)
+
+        dispatch(g.up(PEN))
+        waitUntil("snapped highlight", timeoutMs = 5_000) { listener.added.isNotEmpty() }
+        assertNull("preview ends with the gesture", onMain { view.snapPreviewRects })
+        val stroke = listener.added.single().strokes.single()
+        assertTrue("snapped strokes have flat caps", stroke.flatCaps)
+        // What was previewed is what got highlighted: the stroke's band is the preview box.
+        assertEquals("left", preview[0], stroke.points[0], 0.01f)
+        assertEquals("right", preview[2], stroke.points[2], 0.01f)
+        assertEquals("centre line", (preview[1] + preview[3]) / 2f, stroke.points[1], 0.01f)
+        assertEquals("band height", preview[3] - preview[1], stroke.width, 0.01f)
     }
 
     @Test
