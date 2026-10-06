@@ -3,7 +3,6 @@ package com.studynotes.app.pdf
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.pdf.PdfRendererPreV
 import android.os.ParcelFileDescriptor
@@ -14,6 +13,7 @@ import com.studynotes.app.testutil.Fixtures
 import com.studynotes.app.testutil.PagePixels
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -195,39 +195,44 @@ class PdfDocumentHandleDeviceTest {
     // ---- Text selection ----------------------------------------------------------------------------
 
     @Test
-    fun textSelection_modern_returnsLineRectsInPageSpace() = withHandle(Fixtures.LECTURE_NOTES) { h ->
+    fun textLayout_modern_linesWordsAndSelectionInPageSpace() = withHandle(Fixtures.LECTURE_NOTES) { h ->
         assumeTrue("text selection needs the MODERN backend (API 35+ or S extension 13)", h.supportsTextSelection)
-        // Across the title line, through the middle of its x-height.
-        val rects = runBlocking { h.selectTextRects(0, PointF(60f, 70f), PointF(250f, 70f)) }
-        Log.i(TAG, "title selection: $rects")
-        assertNotNull("title selection", rects)
-        val line = rects!!.single()
-        assertTrue("left edge near the title start: $line", line.left in 50f..70f)
-        assertTrue("top above the cap height: $line", line.top in 50f..66f)
-        assertTrue("bottom below the baseline: $line", line.bottom in 70f..82f)
-        assertTrue("a 20 pt line: $line", line.height() in 12f..30f)
+        val layout = runBlocking { h.textLayout(0) }
+        assertNotNull("page text", layout)
+        assertFalse(layout!!.isVertical)
+        Log.i(TAG, "page 1: ${layout.lineCount} lines, first ${layout.lines.first().words.map { it.box }}")
+        // Reading order starts with the title "Chapter 1: Photosynthesis": three words on one line.
+        val title = layout.lines.first()
+        assertEquals("title words: ${title.words.map { it.box }}", 3, title.words.size)
+        assertTrue("left edge near the title start: ${title.box}", title.box.left in 50f..70f)
+        assertTrue("top above the cap height: ${title.box}", title.box.top in 50f..66f)
+        assertTrue("bottom below the baseline: ${title.box}", title.box.bottom in 70f..82f)
+        assertTrue("a 20 pt line: ${title.box}", title.box.height in 12f..30f)
 
-        // Two lines of the first paragraph: one rect per line, top to bottom, inside the text box.
-        val para = runBlocking { h.selectTextRects(0, PointF(60f, 120f), PointF(500f, 134f)) }
+        // Across the title, through the middle of its x-height, ending mid-word: whole words.
+        val line = layout.select(60f, 70f, 250f, 70f)!!.boxes.single()
+        Log.i(TAG, "title selection: $line")
+        assertEquals("from the first word: $line", title.box.left, line.left, 0.01f)
+        assertTrue("to the end of the last word touched: $line", line.right in 282f..298f)
+
+        // Two lines of the first paragraph: one box per line, top to bottom, inside the text box.
+        val para = layout.select(60f, 120f, 500f, 134f)!!.boxes
         Log.i(TAG, "paragraph selection: $para")
-        assertNotNull("paragraph selection", para)
-        assertEquals("one rect per line: $para", 2, para!!.size)
+        assertEquals("one box per line: $para", 2, para.size)
         assertTrue(para[0].top < para[1].top)
         for (r in para) {
             assertTrue("inside the text box: $r", r.left >= 54f && r.right <= 541f)
-            assertTrue("11 pt line height: $r", r.height() in 6f..20f)
+            assertTrue("11 pt line height: $r", r.height in 6f..20f)
             assertTrue("in the first paragraph: $r", r.top >= 105f && r.bottom <= 145f)
         }
 
-        // Word at point: identical start and end on a word selects that word.
-        val word = runBlocking { h.selectTextRects(0, PointF(80f, 70f), PointF(80f, 70f)) }
+        // Word at point: identical start and end inside a word select that word.
+        val word = layout.select(80f, 70f, 80f, 70f)!!.boxes.single()
         Log.i(TAG, "word selection: $word")
-        if (word != null) {
-            val w = word.single()
-            assertTrue("the word under the point: $w", w.left <= 80f && w.right >= 80f && w.width() < 120f)
-        }
+        assertTrue("the word under the point: $word", word.left <= 80f && word.right >= 80f && word.width < 120f)
 
-        assertNull("out-of-range page", runBlocking { h.selectTextRects(99, PointF(0f, 0f), PointF(10f, 10f)) })
+        assertNull("out-of-range page", runBlocking { h.textLayout(99) })
+        assertSame("cached per page", layout, runBlocking { h.textLayout(0) })
     }
 
     /** Bounds of every occurrence of [word] on [page], straight from the platform's text search. */
@@ -242,8 +247,9 @@ class PdfDocumentHandleDeviceTest {
     }
 
     @Test
-    fun textSelection_modern_growsToWholeWords() = withHandle(Fixtures.LECTURE_NOTES) { h ->
+    fun textLayout_modern_selectsWholeWords() = withHandle(Fixtures.LECTURE_NOTES) { h ->
         assumeTrue("text selection needs the MODERN backend", h.supportsTextSelection)
+        val layout = runBlocking { h.textLayout(0) }!!
         // First paragraph: "... light-dependent reactions, water is split and oxygen is released ..."
         val reactions = wordBounds(Fixtures.LECTURE_NOTES, 0, "reactions").minBy { it.top }
         val oxygen = wordBounds(Fixtures.LECTURE_NOTES, 0, "oxygen")
@@ -252,77 +258,62 @@ class PdfDocumentHandleDeviceTest {
         Log.i(TAG, "reactions $reactions, oxygen $oxygen")
         // From inside the "e" of "reactions" to inside the "n" of "oxygen": the highlight a slightly
         // short stroke asks for. It must still cover both words entirely.
-        val start = PointF(reactions.left + reactions.width() * 0.12f, reactions.centerY())
-        val end = PointF(oxygen.right - oxygen.width() * 0.08f, oxygen.centerY())
-        val rects = runBlocking { h.selectTextRects(0, start, end) }
-        Log.i(TAG, "inside-word selection: $rects")
-        val line = rects!!.single()
+        val line = layout.select(
+            reactions.left + reactions.width() * 0.12f, reactions.centerY(),
+            oxygen.right - oxygen.width() * 0.08f, oxygen.centerY(),
+        )!!.boxes.single()
+        Log.i(TAG, "inside-word selection: $line")
         assertEquals("starts at the start of \"reactions\": $line", reactions.left, line.left, 1.5f)
         assertEquals("ends at the end of \"oxygen\": $line", oxygen.right, line.right, 1.5f)
 
-        // Ending in the gap after a word: the whole word, without the space.
-        val gap = runBlocking {
-            h.selectTextRects(0, PointF(oxygen.left + oxygen.width() * 0.3f, oxygen.centerY()), PointF(oxygen.right + 2f, oxygen.centerY()))
-        }!!.single()
+        // Ending just past a word, in the gap after it: the whole word and nothing more.
+        val gap = layout.select(oxygen.left + oxygen.width() * 0.3f, oxygen.centerY(), oxygen.right + 1f, oxygen.centerY())!!.boxes.single()
         Log.i(TAG, "into-the-gap selection: $gap")
         assertEquals("starts at the start of \"oxygen\": $gap", oxygen.left, gap.left, 1.5f)
         assertEquals("stops at the end of \"oxygen\": $gap", oxygen.right, gap.right, 1.5f)
 
-        // A fragment that occurs dozens of times on the page ("he" of "the") still finds its place.
-        // The first "the " on the page: "... In the light-dependent" at the end of paragraph 1, line 1.
+        // A drag inside a three-letter word ("the", which the page is full of) is that whole word.
         val the = wordBounds(Fixtures.LECTURE_NOTES, 0, "the ").minWith(compareBy({ it.top }, { it.left }))
-        val short = runBlocking {
-            h.selectTextRects(0, PointF(the.left + 3.5f, the.centerY()), PointF(the.left + 12f, the.centerY()))
-        }!!.single()
-        Log.i(TAG, "short-fragment selection: $short (word $the)")
-        assertEquals("starts at the start of \"the\": $short", the.left, short.left, 1.5f)
-
-        // Inside a three-letter word: from the right half of "h" to the left half of "e" selects
-        // nothing by itself, and from inside "h" to inside "e" only "e", a letter found all over the
-        // page. Both still give the whole word.
-        for ((from, to) in listOf(5.8f to 11f, 7.3f to 12.5f)) {
-            val inside = runBlocking {
-                h.selectTextRects(0, PointF(the.left + from, the.centerY()), PointF(the.left + to, the.centerY()))
-            }
+        for ((from, to) in listOf(3.5f to 12f, 5.8f to 11f, 7.3f to 12.5f)) {
+            val inside = layout.select(the.left + from, the.centerY(), the.left + to, the.centerY())!!.boxes
             Log.i(TAG, "inside \"the\" ${the.left + from}..${the.left + to}: $inside")
-            val r = inside!!.single()
+            val r = inside.single()
             assertEquals("whole \"the\" from ${the.left + from}: $r", the.left, r.left, 1.5f)
             assertTrue("whole \"the\" (without the space) from ${the.left + from}: $r", r.right in (the.right - 6f)..(the.right + 0.5f))
         }
     }
 
     @Test
-    fun textSelection_modern_rotatedPage_rectsAreInDisplayedPageSpace() = withHandle(Fixtures.LECTURE_NOTES) { h ->
+    fun textLayout_modern_rotatedPage_isVerticalInDisplayedPageSpace() = withHandle(Fixtures.LECTURE_NOTES) { h ->
         assumeTrue("text selection needs the MODERN backend", h.supportsTextSelection)
+        val layout = runBlocking { h.textLayout(Fixtures.PAGE_ROTATED_90) }!!
+        assertTrue("lines read down the screen", layout.isVertical)
         // The rotated page's title is a vertical line near x = 766..785 (displayed), y = 56..330.
-        val rects = runBlocking {
-            h.selectTextRects(Fixtures.PAGE_ROTATED_90, PointF(776f, 60f), PointF(776f, 250f))
-        }
-        Log.i(TAG, "rotated title selection: $rects")
-        assertNotNull("selection on the rotated page", rects)
-        for (r in rects!!) {
-            assertTrue("rect in displayed page space (right edge, vertical): $r", r.left >= 740f && r.right <= 800f)
-            assertTrue("rect along the title: $r", r.top >= 40f && r.bottom <= 345f)
+        val boxes = layout.select(776f, 60f, 776f, 250f)!!.boxes
+        Log.i(TAG, "rotated title selection: $boxes")
+        assertTrue("selection on the rotated page", boxes.isNotEmpty())
+        for (r in boxes) {
+            assertTrue("box in displayed page space (right edge, vertical): $r", r.left >= 740f && r.right <= 800f)
+            assertTrue("box along the title: $r", r.top >= 40f && r.bottom <= 345f)
         }
     }
 
     @Test
-    fun textSelection_modern_croppedPage_rectsAreRelativeToCropBox() = withHandle(Fixtures.LECTURE_NOTES) { h ->
+    fun textLayout_modern_croppedPage_isRelativeToCropBox() = withHandle(Fixtures.LECTURE_NOTES) { h ->
         assumeTrue("text selection needs the MODERN backend", h.supportsTextSelection)
+        val layout = runBlocking { h.textLayout(Fixtures.PAGE_CROPPED) }!!
         // Title shifted by the crop origin (40, 40): baseline at y = 32, starting at x = 16.
-        val rects = runBlocking { h.selectTextRects(Fixtures.PAGE_CROPPED, PointF(20f, 30f), PointF(200f, 30f)) }
-        Log.i(TAG, "cropped title selection: $rects")
-        assertNotNull(rects)
-        val line = rects!!.single()
+        val line = layout.select(20f, 30f, 200f, 30f)!!.boxes.single()
+        Log.i(TAG, "cropped title selection: $line")
         assertTrue("left edge shifted by the crop box: $line", line.left in 10f..30f)
         assertTrue("top shifted by the crop box: $line", line.top in 10f..26f)
         assertTrue("bottom shifted by the crop box: $line", line.bottom in 30f..42f)
     }
 
     @Test
-    fun textSelection_legacy_isUnsupported() = withHandle(Fixtures.LECTURE_NOTES) { h ->
+    fun textLayout_legacy_isUnsupported() = withHandle(Fixtures.LECTURE_NOTES) { h ->
         assumeFalse("only meaningful on the LEGACY backend", h.supportsTextSelection)
-        assertNull(runBlocking { h.selectTextRects(0, PointF(60f, 70f), PointF(250f, 70f)) })
+        assertNull(runBlocking { h.textLayout(0) })
     }
 
     @Test
@@ -400,7 +391,7 @@ class PdfDocumentHandleDeviceTest {
         assertTrue(h.isClosed)
         val e = runCatching { runBlocking { h.renderPage(0, 100) } }.exceptionOrNull()
         assertTrue("renderPage after close: $e", e is IllegalStateException)
-        assertNull(runBlocking { h.selectTextRects(0, PointF(60f, 70f), PointF(250f, 70f)) })
+        assertNull(runBlocking { h.textLayout(0) })
     }
 
     // ---- Helpers -----------------------------------------------------------------------------------

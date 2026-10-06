@@ -60,9 +60,6 @@ object InkGeometry {
     /** RDP tolerance for highlighter strokes (page points). */
     const val HIGHLIGHTER_SIMPLIFY_TOLERANCE = 0.35f
 
-    /** Snap-to-text: both selection points are moved down by this fraction of the highlighter width. */
-    const val SNAP_BASELINE_BIAS = 0.25f
-
     /** Snapped highlight width relative to the text line height. */
     const val SNAP_WIDTH_FACTOR = 1.15f
 
@@ -283,60 +280,6 @@ object InkGeometry {
     }
 
     /**
-     * Decides whether text-selection rectangles are a plausible snap for a freehand highlight.
-     *
-     * @param rects interleaved left, top, right, bottom per text line (page points).
-     * @param strokePoints the freehand stroke points (page points).
-     * @param highlighterWidth the highlighter width (page points).
-     *
-     * Accepted when non-empty and: each rect is at most 3× the highlighter width tall; the total
-     * vertical span of the rects is at most the stroke's vertical span plus twice the tallest rect;
-     * and at least 60 % of the stroke's points lie inside the rects inflated by half their height.
-     */
-    fun snapPlausible(rects: FloatArray, strokePoints: FloatArray, highlighterWidth: Float): Boolean {
-        val rectCount = rects.size / 4
-        val pointCount = strokePoints.size / 2
-        if (rectCount == 0 || pointCount == 0) return false
-        var minTop = Float.POSITIVE_INFINITY
-        var maxBottom = Float.NEGATIVE_INFINITY
-        var maxHeight = 0f
-        for (r in 0 until rectCount) {
-            val l = rects[4 * r]
-            val t = rects[4 * r + 1]
-            val rr = rects[4 * r + 2]
-            val b = rects[4 * r + 3]
-            val h = b - t
-            if (h <= 0f || rr <= l || h > 3f * highlighterWidth) return false
-            minTop = min(minTop, t)
-            maxBottom = max(maxBottom, b)
-            maxHeight = max(maxHeight, h)
-        }
-        var minY = Float.POSITIVE_INFINITY
-        var maxY = Float.NEGATIVE_INFINITY
-        for (i in 0 until pointCount) {
-            val y = strokePoints[2 * i + 1]
-            minY = min(minY, y)
-            maxY = max(maxY, y)
-        }
-        if (maxBottom - minTop > (maxY - minY) + 2f * maxHeight) return false
-        var inside = 0
-        for (i in 0 until pointCount) {
-            val x = strokePoints[2 * i]
-            val y = strokePoints[2 * i + 1]
-            for (r in 0 until rectCount) {
-                val t = rects[4 * r + 1]
-                val b = rects[4 * r + 3]
-                val pad = (b - t) / 2f
-                if (x >= rects[4 * r] - pad && x <= rects[4 * r + 2] + pad && y >= t - pad && y <= b + pad) {
-                    inside++
-                    break
-                }
-            }
-        }
-        return inside >= 0.6f * pointCount
-    }
-
-    /**
      * Builds the snapped highlight: one flat-capped stroke per text line rect (interleaved l,t,r,b),
      * drawn through the line's vertical centre at 1.15× its height, all sharing [groupId].
      */
@@ -365,31 +308,19 @@ object InkGeometry {
     }
 
     /**
-     * The snapped highlight for a freehand stroke ([strokePoints]) over the text-line [rects], or
-     * null when the snap isn't plausible. Text running down or up the screen (a page with /Rotate
-     * 90 or 270) is handled by swapping x and y, so the stroke follows the line, not across it.
+     * The snapped highlight for the selected text-line [rects] (interleaved l, t, r, b): one stroke
+     * along each line. For [vertical] text (a page with /Rotate 90 or 270, lines reading down or up
+     * the screen) x and y are swapped so the stroke follows the line, not across it.
      */
-    fun snapStrokes(
-        rects: FloatArray,
-        strokePoints: FloatArray,
-        highlighterWidth: Float,
-        color: Int,
-        groupId: String,
-        newId: () -> String,
-    ): List<Stroke>? {
-        if (!isVerticalText(rects, strokePoints)) {
-            if (!snapPlausible(rects, strokePoints, highlighterWidth)) return null
-            return snappedStrokes(rects, color, groupId, newId)
-        }
-        val swappedRects = swapAxesOfRects(rects)
-        if (!snapPlausible(swappedRects, swapAxes(strokePoints), highlighterWidth)) return null
-        return snappedStrokes(swappedRects, color, groupId, newId).map { s ->
+    fun snappedStrokesAlong(rects: FloatArray, vertical: Boolean, color: Int, groupId: String, newId: () -> String): List<Stroke> {
+        if (!vertical) return snappedStrokes(rects, color, groupId, newId)
+        return snappedStrokes(swapAxesOfRects(rects), color, groupId, newId).map { s ->
             Stroke(s.id, s.tool, s.color, s.width, swapAxes(s.points), s.flatCaps, s.groupId)
         }
     }
 
     /**
-     * The area each snapped stroke (from [snapStrokes]) will cover, as interleaved l, t, r, b per
+     * The area each snapped stroke (from [snappedStrokesAlong]) will cover, as interleaved l, t, r, b per
      * stroke: the band of its width around its two-point segment. Drawn as the selection preview
      * while the highlight is being dragged, so what is shown is exactly what the lift commits.
      */
@@ -411,30 +342,6 @@ object InkGeometry {
             out[4 * i + 3] = max(y0, y1) + if (horizontal) half else 0f
         }
         return out
-    }
-
-    /**
-     * True when every rect (interleaved l, t, r, b) is taller than wide and the stroke runs more
-     * vertically than horizontally: lines of text that read down or up the screen.
-     */
-    fun isVerticalText(rects: FloatArray, strokePoints: FloatArray): Boolean {
-        val rectCount = rects.size / 4
-        val pointCount = strokePoints.size / 2
-        if (rectCount == 0 || pointCount < 2) return false
-        for (r in 0 until rectCount) {
-            if (rects[4 * r + 3] - rects[4 * r + 1] <= rects[4 * r + 2] - rects[4 * r]) return false
-        }
-        var minX = Float.POSITIVE_INFINITY
-        var maxX = Float.NEGATIVE_INFINITY
-        var minY = Float.POSITIVE_INFINITY
-        var maxY = Float.NEGATIVE_INFINITY
-        for (i in 0 until pointCount) {
-            minX = min(minX, strokePoints[2 * i])
-            maxX = max(maxX, strokePoints[2 * i])
-            minY = min(minY, strokePoints[2 * i + 1])
-            maxY = max(maxY, strokePoints[2 * i + 1])
-        }
-        return maxY - minY > maxX - minX
     }
 
     /** Interleaved x,y points with x and y swapped. */

@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Matrix
-import android.graphics.PointF
 import android.graphics.RectF
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -71,7 +70,7 @@ class PdfDocumentHandle private constructor(
     /** Size of every page in page points, indexed by page. Computed once at open. */
     val pageSizes: List<SizeF> = dimensions.map { SizeF(it.width.toFloat(), it.height.toFloat()) }
 
-    /** True when [selectTextRects] can return results on this device. */
+    /** True when [textLayout] can describe a page's text on this device. */
     val supportsTextSelection: Boolean get() = backend.supportsTextSelection
 
     val isClosed: Boolean get() = closed.get()
@@ -80,6 +79,9 @@ class PdfDocumentHandle private constructor(
 
     /** Renderer thread only. */
     private val openPage = OpenPageSlot(backend::openPage)
+
+    /** Renderer thread only: the text layout of every page read so far. */
+    private val textLayouts = HashMap<Int, PageTextLayout>()
 
     /**
      * Renders the whole page into a new bitmap [widthPx] wide (height follows the page aspect ratio,
@@ -139,40 +141,23 @@ class PdfDocumentHandle private constructor(
     }
 
     /**
-     * Text-snapping support: returns the bounding rectangles (page points, one per text line,
-     * top-to-bottom) of the text a user would select by dragging from [start] to [end] (page points),
-     * or null when text selection is unsupported, the page has no text there, or anything fails.
-     * Never throws (except CancellationException).
-     *
-     * Also returns null for a page index out of range or after [close]. Positions are rounded to
-     * whole points and clamped to the page; rectangles PDFium reports per font run are merged into
-     * one per line.
+     * Text-snapping support: the page's text as lines of measured words, or null when text
+     * selection is unsupported, the page index is out of range, the handle is closed, or reading
+     * the text fails. Never throws (except CancellationException). Read once per page (every word
+     * is measured, which takes a moment on a dense page) and cached for the life of the handle.
      */
-    suspend fun selectTextRects(pageIndex: Int, start: PointF, end: PointF): List<RectF>? {
+    internal suspend fun textLayout(pageIndex: Int): PageTextLayout? {
         if (!backend.supportsTextSelection || pageIndex !in dimensions.indices || closed.get()) return null
-        val startX = start.x
-        val startY = start.y
-        val endX = end.x
-        val endY = end.y
         return try {
             withContext(dispatcher) {
                 if (closed.get()) return@withContext null
                 ensureActive()
-                val page = dimensions[pageIndex]
-                val boxes = openPage[pageIndex].selectText(
-                    RenderGeometry.selectionCoordinate(startX, page.width) ?: return@withContext null,
-                    RenderGeometry.selectionCoordinate(startY, page.height) ?: return@withContext null,
-                    RenderGeometry.selectionCoordinate(endX, page.width) ?: return@withContext null,
-                    RenderGeometry.selectionCoordinate(endY, page.height) ?: return@withContext null,
-                )
-                TextLineMerger.merge(boxes)
-                    .takeIf { it.isNotEmpty() }
-                    ?.map { RectF(it.left, it.top, it.right, it.bottom) }
+                textLayouts.getOrPut(pageIndex) { openPage[pageIndex].textLayout() }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
-            Log.w(TAG, "Text selection failed on page $pageIndex", t)
+            Log.w(TAG, "Reading the text of page $pageIndex failed", t)
             null
         }
     }

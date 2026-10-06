@@ -60,14 +60,4 @@ class RenderGeometryTest {
         assertNull(RenderGeometry.regionBitmapSize(-100f, 0f, 0f, 100f, 2f, letter)) // left of the page
         assertNull(RenderGeometry.regionBitmapSize(0f, -100f, 100f, 0f, 2f, letter)) // above the page
     }
-
-    @Test
-    fun selectionCoordinatesAreRoundedAndClamped() {
-        assertEquals(100, RenderGeometry.selectionCoordinate(100.4f, 612))
-        assertEquals(101, RenderGeometry.selectionCoordinate(100.5f, 612))
-        assertEquals(0, RenderGeometry.selectionCoordinate(-12f, 612))
-        assertEquals(612, RenderGeometry.selectionCoordinate(640f, 612))
-        assertNull(RenderGeometry.selectionCoordinate(Float.NaN, 612))
-        assertNull(RenderGeometry.selectionCoordinate(Float.NEGATIVE_INFINITY, 612))
-    }
 }

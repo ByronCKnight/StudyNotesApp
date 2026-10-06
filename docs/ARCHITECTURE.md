@@ -98,17 +98,25 @@ Contract in the file. Verified platform facts (see research notes):
 - Page sizes need `openPage` on every page (parses content: ~1-10 ms/page). Cache the list as JSON in
   `sizeCacheDir/<hash of path>.json` with file length + lastModified; reuse when they match.
   Page sizes are ints (truncated points) — use them as-is.
-- Text selection (MODERN only): `page.selectContent(SelectionBoundary(Point(x, y)), SelectionBoundary(Point(x2, y2)))`
-  with integer **page points** (top-left origin). Returns `PageSelection?`; take
-  `selectedTextContents.flatMap { it.bounds }` — RectF per **line**, in page points. Boundaries snap
-  to the nearest character measured to its **baseline**, even far from text; identical start/stop =
-  word-at-point (10 pt tolerance) or null. Wrap in try/catch, return null on failure/empty.
-  `getTextContents()` has no bounds, but its text is what character indices refer to. The returned
-  selection's boundaries carry no index (-1), while `SelectionBoundary(index)` selects by index
-  (stop exclusive). The backend uses this to grow a selection to whole words (`pdf/WordSelection.kt`,
-  `PageText`): find the selected text in the page text (whitespace ignored), confirm the occurrence
-  by re-selecting it by index and comparing bounds (±1 pt; at most 24 candidates), extend both ends
-  over letters/digits/apostrophes, and select again by index. Any mismatch keeps the original.
+- Text geometry (MODERN only), `PdfDocumentHandle.textLayout(page)` → `PageTextLayout`
+  (`pdf/TextLayout.kt`), read once per page and cached in the handle. PDFium gives no character
+  geometry directly: `getTextContents()` is the page text with no bounds, and a point-based
+  `selectContent` snaps to the nearest character even far from text. But a selection by character
+  index (`SelectionBoundary(index)`, stop exclusive) returns the bounds of exactly that text, so the
+  backend splits the page text into lines at its line breaks and words at whitespace, selects every
+  word once by index and keeps its box (`selectedTextContents.flatMap { it.bounds }`, merged;
+  displayed page points, crop and rotation applied). Words are grouped into lines by their boxes
+  (vertical overlap ≥ half the smaller height; a line the engine did not split still comes out as
+  two) and sorted along the line. Orientation (`isVertical`) is a vote over lines with several
+  words. A dense page takes a moment (one quick selection per word); the result is immutable.
+- `PageTextLayout.select(start, end, previousEndLine)`: pure geometry, deterministic, instant. The
+  start must lie on a line (its band within 0.6 × its height); the end goes to the nearest line
+  (horizontal distance counts a quarter, so the column under the pen wins). On one line: the words
+  the span touches. Across lines, in reading order: the rest of the first line from the word under
+  the pen (or the next), every line between whole, the last line up to the word under the pen. The
+  box per line spans the selected words and the line's full height. The end line is sticky: it
+  only moves once the pen is more than 0.35 × line height outside its band, so a wobble between
+  two lines does not toggle the selection.
 
 ## 6. Canvas (`editor/canvas/DocumentCanvasView`)
 
@@ -167,27 +175,24 @@ Determine tool type from `MotionEvent.getToolType(pointerIndex)`.
   stroke. The switch is greyed out while snap to text is off.
 - **Snap to text** (`ToolState.snapToText` && `handle.supportsTextSelection`), highlighter only. The
   text a drag selects is previewed live and the lift commits exactly what was shown:
-  - While the pen is down, after each MOVE call `selectTextRects(page, startPoint, currentPoint)`
-    (one request at a time on the renderer thread; while one runs only the newest pen position is
-    kept and asked for next). Both points are moved DOWN by 0.25 × highlighter width (selection snaps
-    to glyph baselines; a stroke is drawn through the middle of the x-height). Accept if non-empty and
-    plausible: each rect height ≤ 3× highlighter width, total vertical span ≤ stroke's vertical span +
-    2× max rect height, and ≥ 60 % of the stroke's points lie inside the rects inflated by half their
-    height. Accepted → one stroke per rect: `points = [left, centerY, right, centerY]`,
-    `width = rect.height() × 1.15`, `flatCaps = true`, shared `groupId`, the highlighter colour.
-  - Drawing: the accepted strokes' bands are drawn as a translucent grey selection
-    (`InkGeometry.snapPreviewRects`) instead of the freehand stroke; when the latest answer is "no
-    text / implausible" the freehand stroke is shown instead, because that is what the lift would
-    keep (with `snapOnly` nothing is shown, because the lift would drop it). Nothing is drawn until
-    the first answer (a frame or two).
-  - On lift: if no request is running and the last answer was for the stroke's end point (± 1 pt),
-    emit the previewed strokes (or the freehand stroke when the preview was empty; nothing with
-    `snapOnly`) at once. Otherwise one final request settles it; the last preview (or the freehand
-    stroke, or nothing with `snapOnly`) stays visible meanwhile. `flushAwaitingSnaps` drops a
-    `snapOnly` highlight still waiting. A drag shorter than 2 pt previews nothing and is ignored,
-    like a highlighter tap.
-  - Vertical text (a /Rotate 90 or 270 page: every rect taller than wide and the stroke more vertical
-    than horizontal) goes through the same rules with x and y swapped, so the band runs along the line.
+  - On pen down the page's `PageTextLayout` is taken from the canvas cache or read once in the
+    background (`handle.textLayout`); the freehand stroke shows until it is known (a moment, the
+    first time on a page). From then on every MOVE computes the selection locally
+    (`PageTextLayout.select` from the stroke's first point to its current one, with the sticky end
+    line) and shows the selected lines' bands as a translucent grey selection
+    (`InkGeometry.snappedStrokesAlong` → `snapPreviewRects`). No engine call per move, so the
+    preview cannot flicker: it changes only when the pen crosses a word or line boundary.
+  - Nothing selected (start off any line, or a span in a gap): the freehand stroke is shown, because
+    that is what the lift keeps; with `snapOnly` nothing is shown, because the lift drops it.
+  - On lift: the same selection is computed once more from the final points and emitted as one
+    flat-capped stroke per line (`points = [left, centerY, right, centerY]`, `width = line height ×
+    1.15`, shared `groupId`, the highlighter colour), or the freehand stroke (nothing with
+    `snapOnly`) when it selected no text. Lifted before the page's text is known: the stroke waits
+    in `awaitingSnap` (drawn freehand meanwhile) and is snapped when the text arrives;
+    `flushAwaitingSnaps` emits such strokes freehand (drops them with `snapOnly`). A drag shorter
+    than 2 pt previews nothing and is ignored, like a highlighter tap.
+  - Vertical text (a /Rotate 90 or 270 page) goes through the same rules with x and y swapped
+    (`PageTextLayout.isVertical`), so the band runs along the line.
 - Point simplification on lift: Ramer–Douglas–Peucker with tolerance 0.15 pt (pen) / 0.35 pt
   (highlighter), always keeping endpoints. A tap with no movement makes a dot (single point) for the
   pen; the highlighter ignores taps shorter than 2 pt total length.
@@ -478,7 +483,7 @@ write once the document has moved.
 - Main thread never does file IO, PDF rendering, JSON or DOCX work.
 - Every user-visible failure becomes a short, human message (no stack traces).
 - Release build uses R8; keep reflection-free code; PdfBox rules in `proguard-rules.pro`.
-- Unit tests (JVM) for pure logic: JSON, geometry (simplify, hit-test, straighten, snap plausibility),
+- Unit tests (JVM) for pure logic: JSON, geometry (simplify, hit-test, straighten, snapped strokes), text layout (line/word splitting, grouping, selection),
   undo stack, export coordinate transforms, DOCX parsing (with kxml2 on the test classpath).
 - Instrumented tests (`app/src/androidTest`, fixtures in its `assets/`): canvas gestures with real
   MotionEvents (stylus/finger routing, palm guard, cancel, eraser, notes, finger drawing, zoom, snap),
