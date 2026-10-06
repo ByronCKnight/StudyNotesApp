@@ -11,7 +11,7 @@ Android 8.0+ (API 26+) phone or tablet, with or without a stylus.
 |---|---|
 | Easy install | Signed release APK (`dist/StudyNotes-<version>.apk`), sideload. |
 | Dedicated, easy-to-access folder | `Documents/StudyNotes` on shared storage (all-files access on Android 11+; legacy permission on 8–10). Visible in the Files app and over USB from a PC. Private fallback if the user declines. |
-| Highlight text with a stylus | Freehand translucent highlighter (MULTIPLY blend, text stays crisp). Pen draws, fingers scroll/zoom (palm rejection, auto-enabled the first time a stylus is seen). Hold-to-straighten. Optional "Snap to text" (platform text selection, API 35+/ext 13). |
+| Highlight text with a stylus | Freehand translucent highlighter (MULTIPLY blend, text stays crisp). Pen draws, fingers scroll/zoom (palm rejection, auto-enabled the first time a stylus is seen). Hold-to-straighten. "Snap to text" (on by default; platform text selection, API 35+/ext 13). |
 | Add notes | Typed sticky notes placed on the page (Note tool → tap) + handwritten pen ink. |
 | Save button + autosave ~5 min | Explicit **Save** in the editor top bar; autosave every N minutes (default 5) when there are unsaved changes; also saves when the app goes to the background; prompt on exit with unsaved changes. |
 | Google Drive / OneDrive | Import through the system document picker, where the Drive and OneDrive apps appear as sources (no API keys / OAuth app registration needed). Also "Open with" / "Share to StudyNotes" from those apps. Export/share the annotated PDF back to them. |

@@ -110,7 +110,7 @@ class DocumentCanvasViewGestureTest {
 
     @Test
     fun stylusHighlighterStroke_addsOneStrokeInPageSpace() {
-        val tools = ToolState(tool = Tool.HIGHLIGHTER)
+        val tools = ToolState(tool = Tool.HIGHLIGHTER, snapToText = false)
         configure(tools, stylusOnly = true)
         val y = geo.visibleHeightPt * 0.4f
         val t0 = SystemClock.uptimeMillis()
@@ -302,7 +302,7 @@ class DocumentCanvasViewGestureTest {
 
     @Test
     fun palmGuard_fingerWithin400msOfPenLiftIsIgnored_laterFingerScrolls() {
-        configure(ToolState(tool = Tool.HIGHLIGHTER), stylusOnly = true)
+        configure(ToolState(tool = Tool.HIGHLIGHTER, snapToText = false), stylusOnly = true)
         val y = geo.visibleHeightPt * 0.3f
         val t0 = SystemClock.uptimeMillis()
         val pen = Gesture(t0).down(PEN, STYLUS, geo.toView(100f, y)).drag(PEN, geo.toView(300f, y), steps = 10).up(PEN)
@@ -451,7 +451,7 @@ class DocumentCanvasViewGestureTest {
 
     @Test
     fun actionCancel_midStroke_addsNothing_nextStrokeStillWorks() {
-        configure(ToolState(tool = Tool.HIGHLIGHTER), stylusOnly = true)
+        configure(ToolState(tool = Tool.HIGHLIGHTER, snapToText = false), stylusOnly = true)
         val y = geo.visibleHeightPt * 0.3f
         val t0 = SystemClock.uptimeMillis()
         val cancelled = Gesture(t0).down(PEN, STYLUS, geo.toView(100f, y)).drag(PEN, geo.toView(350f, y), steps = 15)
