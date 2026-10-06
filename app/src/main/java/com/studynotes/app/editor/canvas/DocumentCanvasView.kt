@@ -131,7 +131,7 @@ class DocumentCanvasView @JvmOverloads constructor(
     /**
      * A stroke sent to the editor (or, in [awaitingSnap], still waiting for its page's text to be
      * read) that is drawn locally meanwhile. [textOnly]: with [ToolState.snapOnly], no text under it
-     * means no highlight.
+     * means no highlight, and nothing is drawn while it waits.
      */
     private class PendingStroke(val page: Int, val stroke: Stroke, val time: Long, val textOnly: Boolean = false)
     private class ErasedStroke(val page: Int, val time: Long)
@@ -808,7 +808,7 @@ class DocumentCanvasView @JvmOverloads constructor(
         }
         for (i in 0 until awaitingSnap.size) {
             val p = awaitingSnap[i]
-            if (p.page == page) painter.drawStroke(canvas, p.stroke, scale)
+            if (p.page == page && !p.textOnly) painter.drawStroke(canvas, p.stroke, scale)
         }
         if (customNotes) drawNotesWithPreviews(canvas, pageAnn.notes, page, scale)
         if (hasLive) {
@@ -816,10 +816,10 @@ class DocumentCanvasView @JvmOverloads constructor(
             when {
                 !snapLive -> drawLiveStroke(canvas, layout, scale)
                 selection != null -> drawSelection(canvas, selection)
-                // The page's text is still being read (first highlight on this page): the stroke
-                // shows meanwhile. Known, and no text under the stroke: it will stay freehand, so
-                // show it as such, unless text-only, where it would be dropped and shows nothing.
-                snapLayout == null || !snapOnlyLive -> drawLiveStroke(canvas, layout, scale)
+                // Text-only never shows ink: nothing while the page's text is still being read
+                // (first highlight on this page) and nothing where there is no text. Otherwise the
+                // freehand stroke shows, because that is what the lift would keep.
+                !snapOnlyLive -> drawLiveStroke(canvas, layout, scale)
             }
         }
         canvas.restoreToCount(save)
@@ -1685,7 +1685,8 @@ class DocumentCanvasView @JvmOverloads constructor(
     /**
      * A highlight lifted before its page's text was read (the first highlight on a page, lifted
      * quickly): waits for the text, then snaps it. The freehand stroke stays visible meanwhile and
-     * is what is emitted when the page has no text under it, unless [textOnly], where nothing is.
+     * is what is emitted when the page has no text under it, unless [textOnly], where nothing is
+     * shown or emitted.
      */
     private fun requestSnap(h: PdfDocumentHandle, page: Int, stroke: Stroke, raw: FloatArray, textOnly: Boolean) {
         val entry = PendingStroke(page, stroke, SystemClock.uptimeMillis(), textOnly)

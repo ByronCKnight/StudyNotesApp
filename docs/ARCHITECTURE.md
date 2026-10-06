@@ -176,8 +176,8 @@ Determine tool type from `MotionEvent.getToolType(pointerIndex)`.
 - **Snap to text** (`ToolState.snapToText` && `handle.supportsTextSelection`), highlighter only. The
   text a drag selects is previewed live and the lift commits exactly what was shown:
   - On pen down the page's `PageTextLayout` is taken from the canvas cache or read once in the
-    background (`handle.textLayout`); the freehand stroke shows until it is known (a moment, the
-    first time on a page). From then on every MOVE computes the selection locally
+    background (`handle.textLayout`); until it is known (a moment, the first time on a page) the
+    freehand stroke shows, or nothing with `snapOnly`. From then on every MOVE computes the selection locally
     (`PageTextLayout.select` from the stroke's first point to its current one, with the sticky end
     line) and shows the selected lines' bands as a translucent grey selection
     (`InkGeometry.snappedStrokesAlong` → `snapPreviewRects`). No engine call per move, so the
@@ -188,7 +188,7 @@ Determine tool type from `MotionEvent.getToolType(pointerIndex)`.
     flat-capped stroke per line (`points = [left, centerY, right, centerY]`, `width = line height ×
     1.15`, shared `groupId`, the highlighter colour), or the freehand stroke (nothing with
     `snapOnly`) when it selected no text. Lifted before the page's text is known: the stroke waits
-    in `awaitingSnap` (drawn freehand meanwhile) and is snapped when the text arrives;
+    in `awaitingSnap` (drawn freehand meanwhile; not at all with `snapOnly`) and is snapped when the text arrives;
     `flushAwaitingSnaps` emits such strokes freehand (drops them with `snapOnly`). A drag shorter
     than 2 pt previews nothing and is ignored, like a highlighter tap.
   - Vertical text (a /Rotate 90 or 270 page) goes through the same rules with x and y swapped
