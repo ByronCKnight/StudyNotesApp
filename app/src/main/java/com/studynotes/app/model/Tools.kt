@@ -16,6 +16,12 @@ data class ToolState(
      * On by default; the user can turn it off in the highlighter options.
      */
     val snapToText: Boolean = true,
+    /**
+     * With [snapToText], a highlight that finds no text under it is dropped instead of staying a
+     * freehand mark, so the highlighter only ever marks text. On by default; the user can turn it
+     * off in the highlighter options to get freehand marks where there is no text.
+     */
+    val snapOnly: Boolean = true,
     /** Highlighter always draws straight lines (ruler mode). */
     val straightHighlighter: Boolean = false,
 )

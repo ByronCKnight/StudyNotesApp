@@ -162,6 +162,9 @@ Determine tool type from `MotionEvent.getToolType(pointerIndex)`.
   > 24 dp long, convert it to a straight segment start→current point, haptic tick
   (`performHapticFeedback(CLOCK_TICK)`), then until lift only the end point follows the pen.
 - `ToolState.straightHighlighter`: highlighter strokes are always straight segments (start → current).
+- `ToolState.snapOnly` ("Text only", on by default, only meaningful with snap to text): a highlight
+  that finds no text (empty or implausible selection) is dropped instead of becoming a freehand
+  stroke. The switch is greyed out while snap to text is off.
 - **Snap to text** (`ToolState.snapToText` && `handle.supportsTextSelection`), highlighter only. The
   text a drag selects is previewed live and the lift commits exactly what was shown:
   - While the pen is down, after each MOVE call `selectTextRects(page, startPoint, currentPoint)`
@@ -175,11 +178,14 @@ Determine tool type from `MotionEvent.getToolType(pointerIndex)`.
   - Drawing: the accepted strokes' bands are drawn as a translucent grey selection
     (`InkGeometry.snapPreviewRects`) instead of the freehand stroke; when the latest answer is "no
     text / implausible" the freehand stroke is shown instead, because that is what the lift would
-    keep. Nothing is drawn until the first answer (a frame or two).
+    keep (with `snapOnly` nothing is shown, because the lift would drop it). Nothing is drawn until
+    the first answer (a frame or two).
   - On lift: if no request is running and the last answer was for the stroke's end point (± 1 pt),
-    emit the previewed strokes (or the freehand stroke when the preview was empty) at once. Otherwise
-    one final request settles it; the last preview (or the freehand stroke) stays visible meanwhile.
-    A drag shorter than 2 pt previews nothing and is ignored, like a highlighter tap.
+    emit the previewed strokes (or the freehand stroke when the preview was empty; nothing with
+    `snapOnly`) at once. Otherwise one final request settles it; the last preview (or the freehand
+    stroke, or nothing with `snapOnly`) stays visible meanwhile. `flushAwaitingSnaps` drops a
+    `snapOnly` highlight still waiting. A drag shorter than 2 pt previews nothing and is ignored,
+    like a highlighter tap.
   - Vertical text (a /Rotate 90 or 270 page: every rect taller than wide and the stroke more vertical
     than horizontal) goes through the same rules with x and y swapped, so the band runs along the line.
 - Point simplification on lift: Ramer–Douglas–Peucker with tolerance 0.15 pt (pen) / 0.35 pt
