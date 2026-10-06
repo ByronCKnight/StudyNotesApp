@@ -184,37 +184,6 @@ class InkGeometryTest {
         }
     }
 
-    private val freehand = FloatArray(42) { i -> if (i % 2 == 0) 100f + i * 5f else 106f + (i % 4) * 0.5f }
-
-    @Test
-    fun snapAcceptsMatchingLine() {
-        val rects = floatArrayOf(98f, 99f, 310f, 111f)
-        assertTrue(InkGeometry.snapPlausible(rects, freehand, 14f))
-    }
-
-    @Test
-    fun snapRejectsTallRects() {
-        val rects = floatArrayOf(98f, 80f, 310f, 130f) // 50 pt > 3 * 14
-        assertFalse(InkGeometry.snapPlausible(rects, freehand, 14f))
-    }
-
-    @Test
-    fun snapRejectsSelectionsSpanningTooManyLines() {
-        val rects = floatArrayOf(
-            98f, 99f, 310f, 111f,
-            0f, 115f, 500f, 127f,
-            0f, 131f, 500f, 143f,
-        )
-        assertFalse(InkGeometry.snapPlausible(rects, freehand, 14f))
-    }
-
-    @Test
-    fun snapRejectsRectsAwayFromTheStroke() {
-        val rects = floatArrayOf(400f, 99f, 600f, 111f)
-        assertFalse(InkGeometry.snapPlausible(rects, freehand, 14f))
-        assertFalse(InkGeometry.snapPlausible(FloatArray(0), freehand, 14f))
-    }
-
     @Test
     fun snappedStrokesFollowTheLines() {
         var n = 0
@@ -247,9 +216,8 @@ class InkGeometryTest {
     fun snapOnVerticalTextRunsAlongTheLine() {
         // A word reading down the screen (page with /Rotate 90): 10 pt across, 34 pt along.
         val rects = floatArrayOf(400f, 390f, 410f, 424f)
-        val down = FloatArray(20) { i -> if (i % 2 == 0) 405f + (i % 4) * 0.3f else 392f + i * 1.6f }
         var n = 0
-        val out = InkGeometry.snapStrokes(rects, down, 14f, 0xFFFFE94D.toInt(), "g") { "s${n++}" }!!
+        val out = InkGeometry.snappedStrokesAlong(rects, vertical = true, 0xFFFFE94D.toInt(), "g") { "s${n++}" }
         assertEquals(1, out.size)
         assertArrayEquals(floatArrayOf(405f, 390f, 405f, 424f), out[0].points, 1e-4f)
         assertEquals(10f * 1.15f, out[0].width, 1e-4f)
@@ -259,14 +227,7 @@ class InkGeometryTest {
     @Test
     fun snapOnHorizontalTextIsUnchanged() {
         val rects = floatArrayOf(98f, 99f, 310f, 111f)
-        val out = InkGeometry.snapStrokes(rects, freehand, 14f, 0xFFFFE94D.toInt(), "g") { "s" }!!
+        val out = InkGeometry.snappedStrokesAlong(rects, vertical = false, 0xFFFFE94D.toInt(), "g") { "s" }
         assertArrayEquals(floatArrayOf(98f, 105f, 310f, 105f), out[0].points, 1e-4f)
-        assertFalse(InkGeometry.isVerticalText(rects, freehand))
-    }
-
-    @Test
-    fun aTallSingleLetterWithAHorizontalStrokeIsNotVerticalText() {
-        val letter = floatArrayOf(100f, 99f, 105f, 111f)
-        assertFalse(InkGeometry.isVerticalText(letter, floatArrayOf(98f, 106f, 107f, 106f)))
     }
 }
