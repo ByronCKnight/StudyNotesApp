@@ -46,6 +46,8 @@ import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import com.studynotes.app.editor.EditorScreen
 import com.studynotes.app.library.LibraryScreen
 import com.studynotes.app.ui.theme.StudyNotesTheme
+import com.studynotes.app.update.UpdateGate
+import com.studynotes.app.update.UpdateViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -57,6 +59,7 @@ import java.io.File
 class MainActivity : ComponentActivity() {
 
     private val appViewModel: AppViewModel by viewModels()
+    private val updateViewModel: UpdateViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -64,7 +67,10 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) handleIncoming(intent)
         setContent {
             StudyNotesTheme {
-                AppRoot(appViewModel, activity = this)
+                // A newer GitHub release blocks the app until it is installed.
+                UpdateGate(updateViewModel) {
+                    AppRoot(appViewModel, activity = this)
+                }
             }
         }
     }

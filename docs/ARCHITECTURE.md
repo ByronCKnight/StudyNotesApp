@@ -10,8 +10,9 @@ Android 8.0+ (API 26+) phone or tablet, with or without a stylus.
 | Requirement | Design |
 |---|---|
 | Easy install | Signed release APK (`dist/StudyNotes-<version>.apk`), sideload. |
+| Mandatory updates | `update/`: on start the app reads the repository's latest GitHub release (API + read-only token stamped in by the Release workflow); a newer release blocks the app (`UpdateGate`) until its APK is downloaded and installed over the current one. The required release is remembered in prefs so being offline does not bypass it. |
 | Dedicated, easy-to-access folder | `Documents/StudyNotes` on shared storage (all-files access on Android 11+; legacy permission on 8–10). Visible in the Files app and over USB from a PC. Private fallback if the user declines. |
-| Highlight text with a stylus | Freehand translucent highlighter (MULTIPLY blend, text stays crisp). Pen draws, fingers scroll/zoom (palm rejection, auto-enabled the first time a stylus is seen). Hold-to-straighten. Optional "Snap to text" (platform text selection, API 35+/ext 13). |
+| Highlight text with a stylus | Freehand translucent highlighter (MULTIPLY blend, text stays crisp). Pen draws, fingers scroll/zoom (palm rejection, auto-enabled the first time a stylus is seen). Hold-to-straighten. "Snap to text" (on by default; platform text selection, API 35+/ext 13): the text the drag selects is previewed as a grey selection and the lift highlights exactly that. |
 | Add notes | Typed sticky notes placed on the page (Note tool → tap) + handwritten pen ink. |
 | Save button + autosave ~5 min | Explicit **Save** in the editor top bar; autosave every N minutes (default 5) when there are unsaved changes; also saves when the app goes to the background; prompt on exit with unsaved changes. |
 | Google Drive / OneDrive | Import through the system document picker, where the Drive and OneDrive apps appear as sources (no API keys / OAuth app registration needed). Also "Open with" / "Share to StudyNotes" from those apps. Export/share the annotated PDF back to them. |
@@ -161,16 +162,26 @@ Determine tool type from `MotionEvent.getToolType(pointerIndex)`.
   > 24 dp long, convert it to a straight segment start→current point, haptic tick
   (`performHapticFeedback(CLOCK_TICK)`), then until lift only the end point follows the pen.
 - `ToolState.straightHighlighter`: highlighter strokes are always straight segments (start → current).
-- **Snap to text** (`ToolState.snapToText` && `handle.supportsTextSelection`), highlighter only: on lift,
-  call `selectTextRects(page, startPoint, endPoint)` with both points moved DOWN by 0.25 x highlighter
-  width (selection snaps to glyph baselines; a stroke is drawn through the middle of the x-height). Accept if non-empty and plausible: each rect
-  height ≤ 3× highlighter width, total vertical span ≤ stroke's vertical span + 2× max rect height, and
-  ≥ 60 % of the stroke's points lie inside the rects inflated by half their height. Accepted → one
-  stroke per rect: `points = [left, centerY, right, centerY]`, `width = rect.height() × 1.15`,
-  `flatCaps = true`, shared `groupId`, the highlighter colour. Otherwise keep the freehand stroke.
-  Vertical text (a /Rotate 90 or 270 page: every rect taller than wide and the stroke more vertical
-  than horizontal) goes through the same rules with x and y swapped, so the band runs along the line.
-  Keep showing the freehand stroke while waiting.
+- **Snap to text** (`ToolState.snapToText` && `handle.supportsTextSelection`), highlighter only. The
+  text a drag selects is previewed live and the lift commits exactly what was shown:
+  - While the pen is down, after each MOVE call `selectTextRects(page, startPoint, currentPoint)`
+    (one request at a time on the renderer thread; while one runs only the newest pen position is
+    kept and asked for next). Both points are moved DOWN by 0.25 × highlighter width (selection snaps
+    to glyph baselines; a stroke is drawn through the middle of the x-height). Accept if non-empty and
+    plausible: each rect height ≤ 3× highlighter width, total vertical span ≤ stroke's vertical span +
+    2× max rect height, and ≥ 60 % of the stroke's points lie inside the rects inflated by half their
+    height. Accepted → one stroke per rect: `points = [left, centerY, right, centerY]`,
+    `width = rect.height() × 1.15`, `flatCaps = true`, shared `groupId`, the highlighter colour.
+  - Drawing: the accepted strokes' bands are drawn as a translucent grey selection
+    (`InkGeometry.snapPreviewRects`) instead of the freehand stroke; when the latest answer is "no
+    text / implausible" the freehand stroke is shown instead, because that is what the lift would
+    keep. Nothing is drawn until the first answer (a frame or two).
+  - On lift: if no request is running and the last answer was for the stroke's end point (± 1 pt),
+    emit the previewed strokes (or the freehand stroke when the preview was empty) at once. Otherwise
+    one final request settles it; the last preview (or the freehand stroke) stays visible meanwhile.
+    A drag shorter than 2 pt previews nothing and is ignored, like a highlighter tap.
+  - Vertical text (a /Rotate 90 or 270 page: every rect taller than wide and the stroke more vertical
+    than horizontal) goes through the same rules with x and y swapped, so the band runs along the line.
 - Point simplification on lift: Ramer–Douglas–Peucker with tolerance 0.15 pt (pen) / 0.35 pt
   (highlighter), always keeping endpoints. A tap with no movement makes a dot (single point) for the
   pen; the highlighter ignores taps shorter than 2 pt total length.
