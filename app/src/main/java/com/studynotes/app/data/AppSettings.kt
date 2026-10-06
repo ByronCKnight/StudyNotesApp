@@ -121,6 +121,7 @@ class AppSettings(context: Context) {
         put("penWidth", t.penWidth.toDouble())
         put("noteColor", t.noteColor)
         put("snap", t.snapToText)
+        put("snapOnly", t.snapOnly)
         put("straight", t.straightHighlighter)
     }
 
@@ -136,6 +137,7 @@ class AppSettings(context: Context) {
                 .takeIf { it.isFinite() && it > 0f } ?: d.penWidth,
             noteColor = o.optInt("noteColor", Palette.NOTE_COLORS[0]),
             snapToText = o.optBoolean("snap", d.snapToText),
+            snapOnly = o.optBoolean("snapOnly", d.snapOnly),
             straightHighlighter = o.optBoolean("straight", d.straightHighlighter),
         )
     }

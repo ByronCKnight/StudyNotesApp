@@ -133,7 +133,14 @@ class DocumentCanvasView @JvmOverloads constructor(
      * drawn locally meanwhile; [previewRects] is the selection area shown instead of the freehand
      * stroke while a highlight that was previewed as a text selection waits for its final result.
      */
-    private class PendingStroke(val page: Int, val stroke: Stroke, val time: Long, val previewRects: FloatArray? = null)
+    private class PendingStroke(
+        val page: Int,
+        val stroke: Stroke,
+        val time: Long,
+        val previewRects: FloatArray? = null,
+        /** Awaiting a snap with [ToolState.snapOnly]: no text means no highlight, so never draw the freehand stroke. */
+        val textOnly: Boolean = false,
+    )
     private class ErasedStroke(val page: Int, val time: Long)
     private class NotePreview(val page: Int, val x: Float, val y: Float, val time: Long)
 
@@ -205,6 +212,8 @@ class DocumentCanvasView @JvmOverloads constructor(
     // lift commits exactly that selection. The freehand stroke shows only where there is no text.
     /** The live stroke is previewing a text selection. */
     private var snapLive = false
+    /** [snapLive] with [ToolState.snapOnly]: a drag that finds no text highlights nothing. */
+    private var snapOnlyLive = false
 
     /** Bumped when a preview gesture starts or ends, so results of an earlier gesture are dropped. */
     private var snapSerial = 0
@@ -441,6 +450,12 @@ class DocumentCanvasView @JvmOverloads constructor(
      * as a text selection, or null when nothing is previewed. For tests.
      */
     internal val snapPreviewRects: FloatArray? get() = if (snapLive) snapRects else null
+
+    /** Test hook: whether the live snap preview has had at least one answer (possibly "no text"). */
+    internal val snapAnswered: Boolean get() = snapLive && !snapDoneX.isNaN()
+
+    /** Test hook: whether a finished highlight is still waiting for its snap result. */
+    internal val hasAwaitingSnap: Boolean get() = awaitingSnap.isNotEmpty()
 
     /** Colour behind the pages. */
     fun setBackdropColor(color: Int) {
@@ -798,7 +813,7 @@ class DocumentCanvasView @JvmOverloads constructor(
             val p = awaitingSnap[i]
             if (p.page != page) continue
             val preview = p.previewRects
-            if (preview != null) drawSelection(canvas, preview) else painter.drawStroke(canvas, p.stroke, scale)
+            if (preview != null) drawSelection(canvas, preview) else if (!p.textOnly) painter.drawStroke(canvas, p.stroke, scale)
         }
         if (customNotes) drawNotesWithPreviews(canvas, pageAnn.notes, page, scale)
         if (hasLive) {
@@ -806,9 +821,10 @@ class DocumentCanvasView @JvmOverloads constructor(
             when {
                 !snapLive -> drawLiveStroke(canvas, layout, scale)
                 selection != null -> drawSelection(canvas, selection)
-                // No text under the stroke so far: it will stay freehand, show it as such. Until
-                // the first answer there is nothing to show yet (it arrives within a frame or two).
-                !snapDoneX.isNaN() -> drawLiveStroke(canvas, layout, scale)
+                // No text under the stroke so far: it will stay freehand, show it as such, unless
+                // text-only, where it would be dropped and so shows nothing. Until the first answer
+                // there is nothing to show yet (it arrives within a frame or two).
+                !snapDoneX.isNaN() && !snapOnlyLive -> drawLiveStroke(canvas, layout, scale)
             }
         }
         canvas.restoreToCount(save)
@@ -1445,6 +1461,7 @@ class DocumentCanvasView @JvmOverloads constructor(
         livePage = page
         val h = handle
         snapLive = highlighter && toolState.snapToText && h != null && h.supportsTextSelection
+        snapOnlyLive = snapLive && toolState.snapOnly
         if (snapLive) resetSnapPreview()
         liveLengthPx = 0f
         liveMaxMovePx = 0f
@@ -1529,6 +1546,7 @@ class DocumentCanvasView @JvmOverloads constructor(
         // What the user saw last: the preview is current when no request is running and the last
         // answer was for the stroke's final point; otherwise one more request settles it.
         val wasSnapLive = snapLive
+        val textOnly = snapOnlyLive
         val previewed = snapStrokes
         val previewRects = snapRects
         val n = livePoints.pointCount
@@ -1563,9 +1581,9 @@ class DocumentCanvasView @JvmOverloads constructor(
         val h = handle
         if (tool == InkTool.HIGHLIGHTER && toolState.snapToText && h != null && h.supportsTextSelection) {
             if (previewCurrent) {
-                emitStrokes(page, previewed ?: listOf(stroke))
+                emitStrokes(page, previewed ?: if (textOnly) emptyList() else listOf(stroke))
             } else {
-                requestSnap(h, page, stroke, raw, if (wasSnapLive) previewRects else null)
+                requestSnap(h, page, stroke, raw, if (wasSnapLive) previewRects else null, textOnly)
             }
         } else {
             emitStrokes(page, listOf(stroke))
@@ -1590,6 +1608,7 @@ class DocumentCanvasView @JvmOverloads constructor(
     private fun endSnapPreview() {
         resetSnapPreview()
         snapLive = false
+        snapOnlyLive = false
     }
 
     /**
@@ -1666,6 +1685,7 @@ class DocumentCanvasView @JvmOverloads constructor(
     }
 
     private fun emitStrokes(page: Int, strokes: List<Stroke>) {
+        if (strokes.isEmpty()) return
         val now = SystemClock.uptimeMillis()
         for (s in strokes) pendingStrokes.add(PendingStroke(page, s, now))
         listener?.onStrokesAdded(page, strokes)
@@ -1675,26 +1695,37 @@ class DocumentCanvasView @JvmOverloads constructor(
     /**
      * Asks the PDF engine for the text lines under a finished highlight. Meanwhile the last selection
      * preview ([previewRects]) or, without one, the freehand stroke stays visible; the stroke is
-     * emitted unchanged when the snap is implausible or unavailable.
+     * emitted unchanged when the snap is implausible or unavailable. With [textOnly] there is no
+     * freehand fallback: nothing is shown without a preview and nothing is emitted without text.
      */
-    private fun requestSnap(h: PdfDocumentHandle, page: Int, stroke: Stroke, raw: FloatArray, previewRects: FloatArray?) {
-        val entry = PendingStroke(page, stroke, SystemClock.uptimeMillis(), previewRects)
+    private fun requestSnap(
+        h: PdfDocumentHandle,
+        page: Int,
+        stroke: Stroke,
+        raw: FloatArray,
+        previewRects: FloatArray?,
+        textOnly: Boolean,
+    ) {
+        val entry = PendingStroke(page, stroke, SystemClock.uptimeMillis(), previewRects, textOnly)
         awaitingSnap.add(entry)
         val scope = inkScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main).also { inkScope = it }
         scope.launch {
             val strokes = snapSelection(h, page, raw, stroke.width, stroke.color)
             // Already flushed (document switched / view released): the freehand stroke was emitted.
             if (!awaitingSnap.remove(entry)) return@launch
-            emitStrokes(page, strokes ?: listOf(stroke))
+            emitStrokes(page, strokes ?: if (textOnly) emptyList() else listOf(stroke))
         }
     }
 
-    /** Emits every highlight still waiting for a snap result as drawn (freehand). */
+    /**
+     * Emits every highlight still waiting for a snap result as drawn (freehand). A text-only one has
+     * no freehand form to keep and is dropped.
+     */
     private fun flushAwaitingSnaps() {
         if (awaitingSnap.isEmpty()) return
         val waiting = ArrayList(awaitingSnap)
         awaitingSnap.clear()
-        for (p in waiting) emitStrokes(p.page, listOf(p.stroke))
+        for (p in waiting) if (!p.textOnly) emitStrokes(p.page, listOf(p.stroke))
     }
 
     // ---- Eraser ------------------------------------------------------------------------------
