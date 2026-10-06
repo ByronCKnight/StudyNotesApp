@@ -46,16 +46,6 @@ internal object RenderGeometry {
         return PixelSize(ceilPx((right - left) * pxPerPt), ceilPx((bottom - top) * pxPerPt))
     }
 
-    /**
-     * Converts a page-point coordinate to the integer form the text-selection API takes, clamped to
-     * [0, extent] so a stroke ending just past the page edge still selects the nearest text.
-     * Returns null for NaN/infinite input.
-     */
-    fun selectionCoordinate(value: Float, extent: Int): Int? {
-        if (!value.isFinite()) return null
-        return value.coerceIn(0f, extent.toFloat()).roundToInt()
-    }
-
     private fun ceilPx(value: Float): Int =
         ceil(value.toDouble() - CEIL_TOLERANCE_PX).toInt().coerceAtLeast(1)
 }

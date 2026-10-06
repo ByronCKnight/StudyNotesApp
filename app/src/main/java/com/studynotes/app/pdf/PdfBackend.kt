@@ -2,18 +2,14 @@ package com.studynotes.app.pdf
 
 import android.graphics.Bitmap
 import android.graphics.Matrix
-import android.graphics.Point
-import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.graphics.pdf.PdfRendererPreV
 import android.graphics.pdf.RenderParams
-import android.graphics.pdf.models.selection.PageSelection
 import android.graphics.pdf.models.selection.SelectionBoundary
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.ext.SdkExtensions
 import androidx.annotation.RequiresExtension
-import kotlin.math.abs
 
 /**
  * The platform renderer behind a [PdfDocumentHandle]. Implementations are not thread-safe; the
@@ -22,7 +18,7 @@ import kotlin.math.abs
 internal interface PdfBackend : AutoCloseable {
     val pageCount: Int
 
-    /** True when [BackendPage.selectText] is implemented. */
+    /** True when [BackendPage.textLayout] can describe a page's text. */
     val supportsTextSelection: Boolean
 
     /** Opens page [index]. Any previously opened page must be closed first. */
@@ -54,10 +50,10 @@ internal interface BackendPage : AutoCloseable {
     fun render(bitmap: Bitmap, transform: Matrix)
 
     /**
-     * Raw bounds (page points) of the text selected between two page-point positions; empty when
-     * nothing is selected. Only called when [PdfBackend.supportsTextSelection] is true.
+     * The page's text as lines of measured words (page points of the displayed page). Only called
+     * when [PdfBackend.supportsTextSelection] is true; empty when the page has no text.
      */
-    fun selectText(startX: Int, startY: Int, stopX: Int, stopY: Int): List<TextBox>
+    fun textLayout(): PageTextLayout
 
     override fun close()
 }
@@ -80,7 +76,7 @@ internal class LegacyBackend(descriptor: ParcelFileDescriptor) : PdfBackend {
         override fun render(bitmap: Bitmap, transform: Matrix) =
             page.render(bitmap, null, transform, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
-        override fun selectText(startX: Int, startY: Int, stopX: Int, stopY: Int): List<TextBox> = emptyList()
+        override fun textLayout(): PageTextLayout = PageTextLayout(emptyList())
 
         override fun close() = page.close()
     }
@@ -92,14 +88,6 @@ internal class LegacyBackend(descriptor: ParcelFileDescriptor) : PdfBackend {
  */
 @RequiresExtension(extension = Build.VERSION_CODES.S, version = PdfBackend.MODERN_EXTENSION_VERSION)
 internal class ModernBackend(descriptor: ParcelFileDescriptor) : PdfBackend {
-    private companion object {
-        /**
-         * Places checked when the selected text appears more than once on the page (a fragment like
-         * "he" can occur dozens of times); each check is one quick selection by index.
-         */
-        const val MAX_CANDIDATES = 160
-    }
-
     // Built before the renderer so a failure here cannot leave an open renderer behind.
     private val renderParams = RenderParams.Builder(RenderParams.RENDER_MODE_FOR_DISPLAY)
         .setRenderFlags(RenderParams.FLAG_RENDER_HIGHLIGHT_ANNOTATIONS or RenderParams.FLAG_RENDER_TEXT_ANNOTATIONS)
@@ -119,97 +107,45 @@ internal class ModernBackend(descriptor: ParcelFileDescriptor) : PdfBackend {
 
         override fun render(bitmap: Bitmap, transform: Matrix) = page.render(bitmap, null, transform, params)
 
-        /** The page's text, which PDFium's character indices refer to; read on first use. */
-        private var pageText: PageText? = null
-
-        override fun selectText(startX: Int, startY: Int, stopX: Int, stopY: Int): List<TextBox> {
-            val selection = page.selectContent(
-                SelectionBoundary(Point(startX, startY)),
-                SelectionBoundary(Point(stopX, stopY)),
-            )?.takeIf { it.hasBounds() }
-            val chosen = if (selection != null) {
-                toWholeWords(selection) ?: selection
-            } else {
-                // A short stroke inside one word can select nothing (both ends round to the same
-                // letter edge): take the word under its middle.
-                wordAt((startX + stopX) / 2, (startY + stopY) / 2) ?: return emptyList()
+        /**
+         * Measures every word on the page. PDFium reports no character geometry directly, but a
+         * selection by character index (stop exclusive) returns the bounds of exactly that text,
+         * so each word is selected once by its place in the page text and its box kept. The page
+         * text splits into the engine's lines at its line breaks; words are then grouped into lines
+         * by their boxes, so a line the engine did not split still comes out as two.
+         */
+        override fun textLayout(): PageTextLayout {
+            val text = page.textContents.joinToString("") { it.text }
+            val engineLines = ArrayList<List<TextWord>>()
+            for (range in TextLayoutBuilder.lineRanges(text)) {
+                val words = ArrayList<TextWord>()
+                for (w in TextLayoutBuilder.wordRanges(text, range)) {
+                    val box = boxOf(w.first, w.last + 1) ?: continue
+                    words += TextWord(box, w.first, w.last + 1)
+                }
+                if (words.isNotEmpty()) engineLines += words
             }
-            return chosen.selectedTextContents
-                .flatMap { it.bounds }
-                .map { TextBox(it.left, it.top, it.right, it.bottom) }
+            // Lines of several words decide whether the text runs across or down the page.
+            var vote = 0
+            for (words in engineLines) {
+                val box = words.map { it.box }.reduce(TextBox::union)
+                vote += if (box.height > box.width) words.size else -words.size
+            }
+            val vertical = vote > 0
+            return PageTextLayout(engineLines.flatMap { TextLayoutBuilder.linesOf(it, vertical) })
         }
 
-        /** The word at a page point (PDFium selects it when both boundaries are that point). */
-        private fun wordAt(x: Int, y: Int): PageSelection? = try {
-            page.selectContent(SelectionBoundary(Point(x, y)), SelectionBoundary(Point(x, y)))?.takeIf { it.hasBounds() }
+        /** The box (displayed page points) of the text from character [from] until [until], or null when it has none. */
+        private fun boxOf(from: Int, until: Int): TextBox? = try {
+            page.selectContent(SelectionBoundary(from), SelectionBoundary(until))
+                ?.selectedTextContents
+                ?.flatMap { it.bounds }
+                ?.map { TextBox(it.left, it.top, it.right, it.bottom) }
+                ?.filter { it.isValid }
+                ?.takeIf { it.isNotEmpty() }
+                ?.reduce(TextBox::union)
         } catch (e: RuntimeException) {
             null
-        }
-
-        private fun PageSelection.hasBounds(): Boolean = selectedTextContents.any { it.bounds.isNotEmpty() }
-
-        /**
-         * [selection] grown to whole words ([PageText]); null to keep it as it is (already whole
-         * words, or its place in the page text can't be pinned down).
-         */
-        private fun toWholeWords(selection: PageSelection): PageSelection? = try {
-            val text = pageText ?: PageText(page.textContents.joinToString("") { it.text }).also { pageText = it }
-            val bounds = selection.selectedTextContents.flatMap { it.bounds }
-            val selected = selection.selectedTextContents.joinToString("") { it.text }
-            // A stroke ending in the gap after a word selects that space too; it counts for the bounds.
-            val spaceBefore = selected.firstOrNull()?.isWhitespace() == true
-            val spaceAfter = selected.lastOrNull()?.isWhitespace() == true
-            // The same words can appear several times on a page: the right place has the same bounds.
-            val candidates = text.occurrences(selected, MAX_CANDIDATES)
-                ?: return@toWholeWords byWordsAtEnds(bounds, spaceBefore, spaceAfter)
-            val place = candidates.firstOrNull { (from, until) ->
-                val (checkFrom, checkUntil) = text.withAdjacentWhitespace(from, until, spaceBefore, spaceAfter)
-                val candidate = page.selectContent(SelectionBoundary(checkFrom), SelectionBoundary(checkUntil))
-                candidate != null && sameArea(candidate.selectedTextContents.flatMap { it.bounds }, bounds)
-            }
-            place?.let { (from, until) ->
-                // Whole words, and never the stray space at either end.
-                text.wholeWords(from, until) ?: (from to until).takeIf { spaceBefore || spaceAfter }
-            }?.let { (from, until) ->
-                page.selectContent(SelectionBoundary(from), SelectionBoundary(until))?.takeIf { it.hasBounds() }
-            }
-        } catch (e: RuntimeException) {
-            null
-        }
-
-        /**
-         * For a fragment too common to place by its text (a letter or two): reselect from just inside
-         * the word under its first character to just inside the word under its last. Horizontal text
-         * only; an end that is a space is left as it is.
-         */
-        private fun byWordsAtEnds(bounds: List<RectF>, spaceBefore: Boolean, spaceAfter: Boolean): PageSelection? {
-            val first = bounds.firstOrNull() ?: return null
-            val last = bounds.last()
-            val startY = first.centerY().toInt()
-            val stopY = last.centerY().toInt()
-            val startWord = if (spaceBefore) null else wordAt(first.left.toInt() + 1, startY)?.area()
-            val stopWord = if (spaceAfter) null else wordAt(last.right.toInt() - 1, stopY)?.area()
-            // Text running down or up the page: its words don't start and end at x edges.
-            if (listOfNotNull(startWord, stopWord).any { it.height() > it.width() }) return null
-            val startX = startWord?.left ?: first.left
-            val stopX = stopWord?.right ?: last.right
-            return page.selectContent(
-                SelectionBoundary(Point(startX.toInt() + 1, startY)),
-                SelectionBoundary(Point(stopX.toInt() - 1, stopY)),
-            )?.takeIf { it.hasBounds() }
-        }
-
-        private fun PageSelection.area(): RectF? {
-            val rects = selectedTextContents.flatMap { it.bounds }
-            return rects.firstOrNull()?.let { RectF(it).apply { rects.forEach { r -> union(r) } } }
-        }
-
-        private fun sameArea(a: List<RectF>, b: List<RectF>): Boolean {
-            if (a.isEmpty() || b.isEmpty()) return false
-            val ua = RectF(a[0]).apply { a.forEach { union(it) } }
-            val ub = RectF(b[0]).apply { b.forEach { union(it) } }
-            return abs(ua.left - ub.left) <= 1f && abs(ua.top - ub.top) <= 1f &&
-                abs(ua.right - ub.right) <= 1f && abs(ua.bottom - ub.bottom) <= 1f
         }
 
         override fun close() = page.close()
