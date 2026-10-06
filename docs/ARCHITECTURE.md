@@ -10,6 +10,7 @@ Android 8.0+ (API 26+) phone or tablet, with or without a stylus.
 | Requirement | Design |
 |---|---|
 | Easy install | Signed release APK (`dist/StudyNotes-<version>.apk`), sideload. |
+| Mandatory updates | `update/`: on start the app reads the repository's latest GitHub release (API + read-only token stamped in by the Release workflow); a newer release blocks the app (`UpdateGate`) until its APK is downloaded and installed over the current one. The required release is remembered in prefs so being offline does not bypass it. |
 | Dedicated, easy-to-access folder | `Documents/StudyNotes` on shared storage (all-files access on Android 11+; legacy permission on 8–10). Visible in the Files app and over USB from a PC. Private fallback if the user declines. |
 | Highlight text with a stylus | Freehand translucent highlighter (MULTIPLY blend, text stays crisp). Pen draws, fingers scroll/zoom (palm rejection, auto-enabled the first time a stylus is seen). Hold-to-straighten. "Snap to text" (on by default; platform text selection, API 35+/ext 13): the text the drag selects is previewed as a grey selection and the lift highlights exactly that. |
 | Add notes | Typed sticky notes placed on the page (Note tool → tap) + handwritten pen ink. |

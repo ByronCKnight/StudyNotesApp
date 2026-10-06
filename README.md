@@ -94,4 +94,30 @@ Release signing uses `keystore.properties` + `studynotes-release.jks` in the pro
 git-ignored). **Back up both files**: Android only installs an update over an existing install if
 it is signed with the same key. Without them, release builds fall back to the debug key.
 
+## Updates and releases
+
+StudyNotes is not on the Play Store; it updates itself from this repository's GitHub releases.
+On every start (and whenever it comes back to the front) the app reads the latest release. A newer
+one shows a full-screen *Update required* page and nothing else works until it is installed: the
+page downloads the APK and hands it to Android's installer, which installs it over the existing app
+(same signing key, documents and notes untouched). The first time, Android asks to allow StudyNotes
+to install apps. A required update is remembered, so going offline does not get around it; while
+no newer release is known, being offline changes nothing.
+
+Publishing a release:
+
+1. Tag the commit: `git tag v1.1.0 && git push origin v1.1.0` (the tag is the version; versionCode
+   is derived from it, 1.1.0 → 1001000, so it always increases).
+2. The **Release** workflow (`.github/workflows/release.yml`) runs the unit tests, builds the signed
+   APK and publishes the GitHub release with `StudyNotes-1.1.0.apk` attached and generated notes.
+   Edit the release notes on GitHub if you like; the app shows them on the update page.
+
+The workflow needs these repository secrets (Settings → Secrets and variables → Actions):
+`RELEASE_KEYSTORE_BASE64` (`base64 -w0 studynotes-release.jks`), `RELEASE_STORE_PASSWORD`,
+`RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`, and `STUDYNOTES_UPDATE_TOKEN`: a fine-grained personal
+access token for this repository only with *Contents: read-only*, which the build stamps into the
+APK so installed copies can read releases while the repository is private. When that token expires,
+store a new one and publish a new release. A build without a token (a local debug build) never
+checks for updates. People need the first APK from you directly; from then on the app updates itself.
+
 Architecture notes for developers are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
