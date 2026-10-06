@@ -154,6 +154,36 @@ class InkGeometryTest {
 
     // ---- Snap to text ------------------------------------------------------------------------
 
+    @Test
+    fun snapPreviewRects_coverTheBandOfEachSnappedStroke() {
+        val horizontal = Stroke("h", InkTool.HIGHLIGHTER, 1, 12f, floatArrayOf(10f, 20f, 110f, 20f), flatCaps = true, groupId = "g")
+        val vertical = Stroke("v", InkTool.HIGHLIGHTER, 1, 12f, floatArrayOf(50f, 110f, 50f, 10f), flatCaps = true, groupId = "g")
+        val rects = InkGeometry.snapPreviewRects(listOf(horizontal, vertical))
+        assertArrayEquals(
+            floatArrayOf(
+                10f, 14f, 110f, 26f, // along x, half the width above and below
+                44f, 10f, 56f, 110f, // along y (rotated page), half the width left and right
+            ),
+            rects,
+            0.001f,
+        )
+    }
+
+    @Test
+    fun snapPreviewRects_matchTheSnappedStrokes() {
+        val lines = floatArrayOf(98f, 99f, 310f, 111f, 100f, 115f, 250f, 127f)
+        val strokes = InkGeometry.snappedStrokes(lines, 1, "g") { "id" }
+        val rects = InkGeometry.snapPreviewRects(strokes)
+        assertEquals(8, rects.size)
+        for (i in 0 until 2) {
+            val s = strokes[i]
+            assertEquals(s.points[0], rects[4 * i], 0.001f)
+            assertEquals(s.points[2], rects[4 * i + 2], 0.001f)
+            assertEquals(s.points[1] - s.width / 2f, rects[4 * i + 1], 0.001f)
+            assertEquals(s.points[1] + s.width / 2f, rects[4 * i + 3], 0.001f)
+        }
+    }
+
     private val freehand = FloatArray(42) { i -> if (i % 2 == 0) 100f + i * 5f else 106f + (i % 4) * 0.5f }
 
     @Test

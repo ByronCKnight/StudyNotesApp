@@ -11,8 +11,11 @@ data class ToolState(
     val penColor: Int = Palette.PEN_COLORS[0],
     val penWidth: Float = Palette.PEN_WIDTHS[1],
     val noteColor: Int = Palette.NOTE_COLORS[0],
-    /** Snap highlighter strokes to the text lines they cover (only where the platform supports text selection). */
-    val snapToText: Boolean = false,
+    /**
+     * Snap highlighter strokes to the text lines they cover (only where the platform supports text selection).
+     * On by default; the user can turn it off in the highlighter options.
+     */
+    val snapToText: Boolean = true,
     /** Highlighter always draws straight lines (ruler mode). */
     val straightHighlighter: Boolean = false,
 )

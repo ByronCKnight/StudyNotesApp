@@ -2,6 +2,8 @@
 <paths>
     <!-- Annotated PDF exports are written to cacheDir/exports before being shared. -->
     <cache-path name="exports" path="exports/" />
+    <!-- Downloaded app updates, handed to the system installer. -->
+    <cache-path name="updates" path="updates/" />
     <!-- Library folder (shared Documents/StudyNotes, or the private fallback) for "Share original". -->
     <external-path name="library" path="Documents/StudyNotes/" />
     <external-files-path name="private_library" path="StudyNotes/" />
