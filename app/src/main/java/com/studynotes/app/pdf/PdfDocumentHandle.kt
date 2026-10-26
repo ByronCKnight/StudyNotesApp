@@ -83,6 +83,9 @@ class PdfDocumentHandle private constructor(
     /** Renderer thread only: the text layout of every page read so far. */
     private val textLayouts = HashMap<Int, PageTextLayout>()
 
+    /** Renderer thread only: the text of every page read so far. */
+    private val pageTexts = HashMap<Int, String>()
+
     /**
      * Renders the whole page into a new bitmap [widthPx] wide (height follows the page aspect ratio,
      * rounded, min 1px).
@@ -153,6 +156,29 @@ class PdfDocumentHandle private constructor(
                 if (closed.get()) return@withContext null
                 ensureActive()
                 textLayouts.getOrPut(pageIndex) { openPage[pageIndex].textLayout() }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Log.w(TAG, "Reading the text of page $pageIndex failed", t)
+            null
+        }
+    }
+
+    /**
+     * Search support: the page's text as the engine extracts it (a [TextSearch] hit's characters
+     * are the same ones the words of [textLayout] cover), or null when text is unsupported, the
+     * page index is out of range, the handle is closed, or reading fails. Never throws (except
+     * CancellationException). One quick engine call per page, no words measured, cached for the
+     * life of the handle: searching a whole document costs one page parse per page.
+     */
+    internal suspend fun pageText(pageIndex: Int): String? {
+        if (!backend.supportsTextSelection || pageIndex !in dimensions.indices || closed.get()) return null
+        return try {
+            withContext(dispatcher) {
+                if (closed.get()) return@withContext null
+                ensureActive()
+                pageTexts.getOrPut(pageIndex) { openPage[pageIndex].text() }
             }
         } catch (e: CancellationException) {
             throw e

@@ -36,6 +36,11 @@ Your highlights and notes are stored next to the documents in a hidden `.studyno
 
 Tap a selected tool again for its colours and sizes.
 
+- **Find in document:** tap 🔍 in the top bar (on a phone, ⋮ → **Find in document…**) and type a
+  word or phrase. Every match is marked on the pages and the nearest one ahead of you is shown;
+  ▲ ▼ (or Enter) step through them, and the bar counts "3 of 12". Capitals don't matter, and a
+  phrase is found even where it breaks across a line. On a hardware keyboard, Ctrl+F opens the
+  bar and F3 / Shift+F3 step through the matches.
 - **Pen vs finger:** the first time you touch the screen with a stylus, StudyNotes switches to
   pen mode: the pen draws, fingers scroll and pinch-zoom, and your palm is ignored. To draw with
   your finger instead (phones), turn on **Draw with finger** in Settings or the editor's ⋮ menu.
@@ -72,8 +77,9 @@ keys tied to a signing certificate; the system picker gives the same access with
 - Word documents are converted to PDF for annotating. Headers and footers aren't shown, text
   boxes may be missing, and floating pictures are placed in line with the text, so complex layouts
   can look different from Word.
-- *Snap to text* needs Android 15, or Android 12–14 with a current Google Play system update (the
-  Idea Tab's Android 14 qualifies). On older systems highlights stay freehand.
+- *Snap to text* and *Find in document* need Android 15, or Android 12–14 with a current Google
+  Play system update (the Idea Tab's Android 14 qualifies). On older systems highlights stay
+  freehand and search isn't offered.
 - Documents with a password open after you enter it once; Word files with a password can't be opened.
 
 ## Building from source

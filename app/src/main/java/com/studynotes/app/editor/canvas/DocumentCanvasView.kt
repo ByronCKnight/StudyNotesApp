@@ -14,6 +14,7 @@ import android.graphics.RectF
 import android.os.Build
 import android.os.SystemClock
 import android.util.AttributeSet
+import android.util.SparseArray
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.InputDevice
@@ -36,6 +37,7 @@ import com.studynotes.app.model.ViewState
 import com.studynotes.app.model.newAnnotationId
 import com.studynotes.app.pdf.PageTextLayout
 import com.studynotes.app.pdf.PdfDocumentHandle
+import com.studynotes.app.pdf.SearchHit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -227,6 +229,23 @@ class DocumentCanvasView @JvmOverloads constructor(
     /** Page texts already read for this document (the handle caches them too; this skips the thread hop). */
     private val textLayouts = HashMap<Int, PageTextLayout>()
 
+    // Search marks: the editor's find-in-document hits, drawn on their pages once the page's text
+    // (word geometry) is known; the current hit is emphasised.
+    private var searchHits: List<SearchHit> = emptyList()
+    private var searchCurrent = -1
+    private val hitsByPage = SparseArray<ArrayList<SearchHit>>()
+
+    /** Marks per page (interleaved l, t, r, b per text line, page points); absent until the page's text is read. */
+    private val searchMarks = SparseArray<FloatArray>()
+    private var currentMarks: FloatArray? = null
+    private var currentMarksPage = -1
+
+    /** Pages whose text is being read for their marks. */
+    private val searchTextRequests = HashSet<Int>()
+
+    /** Bumped by every showSearchHit, so a page text read for an earlier one doesn't scroll. */
+    private var searchShowSerial = 0
+
     // Eraser
     private val eraseGesture = HashMap<Int, HashSet<String>>()
     private var erasePage = -1
@@ -309,6 +328,12 @@ class DocumentCanvasView @JvmOverloads constructor(
         color = 0xB3FFFFFF.toInt()
     }
     private val selectionPaint = Paint().apply { color = SELECTION_COLOR }
+    private val searchMarkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = SEARCH_MARK_COLOR }
+    private val currentMarkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = CURRENT_MARK_COLOR }
+    private val currentMarkOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = CURRENT_MARK_OUTLINE_COLOR
+    }
     private val tmpRect = RectF()
 
     private val scaleDetector = ScaleGestureDetector(context, ScaleListener()).apply {
@@ -335,6 +360,7 @@ class DocumentCanvasView @JvmOverloads constructor(
         stopMotion()
         this.handle = handle
         textLayouts.clear()
+        clearSearchMarks()
         // The annotation snapshot is kept: the editor may have set it before the document.
         pendingStrokes.clear()
         hiddenStrokeIds.clear()
@@ -460,6 +486,55 @@ class DocumentCanvasView @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * Marks the find-in-document [hits] on their pages, the one at [currentIndex] emphasised (an
+     * empty list clears the marks). A page's marks appear once its text has been read, from the
+     * cache or in the background the first time the page is drawn. Cheap and a no-op when
+     * unchanged. Internal addition to the frozen API.
+     */
+    internal fun setSearchHits(hits: List<SearchHit>, currentIndex: Int) {
+        if (hits === searchHits && currentIndex == searchCurrent) return
+        if (hits != searchHits) {
+            searchHits = hits
+            hitsByPage.clear()
+            searchMarks.clear()
+            for (h in hits) {
+                val onPage = hitsByPage[h.page] ?: ArrayList<SearchHit>().also { hitsByPage.put(h.page, it) }
+                onPage += h
+            }
+        }
+        searchCurrent = currentIndex
+        currentMarks = null
+        currentMarksPage = -1
+        invalidate()
+    }
+
+    /**
+     * Brings [hit] into view: scrolls (animated) so that its text lies in the part of the view
+     * the toolbars don't cover, unless it already does. When its page's text is not known yet the
+     * page is scrolled to first (if off screen), then the text is read and the scroll refined.
+     * Internal addition to the frozen API.
+     */
+    internal fun showSearchHit(hit: SearchHit) {
+        val layout = viewport.layout ?: return
+        if (hit.page !in 0 until layout.pageCount) return
+        val serial = ++searchShowSerial
+        val text = textLayouts[hit.page]
+        if (text != null) {
+            scrollToMarks(hit.page, marksOf(text, hit))
+            return
+        }
+        if (!layout.isConfigured || !isPageInView(hit.page)) scrollToPage(hit.page)
+        val h = handle ?: return
+        val scope = inkScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main).also { inkScope = it }
+        scope.launch {
+            val loaded = loadTextLayout(h, hit.page)
+            if (serial != searchShowSerial || loaded == null) return@launch
+            scrollToMarks(hit.page, marksOf(loaded, hit))
+            invalidate()
+        }
+    }
+
     fun scrollToPage(pageIndex: Int, animate: Boolean = true) {
         val layout = viewport.layout ?: return
         if (layout.pageCount == 0) return
@@ -506,6 +581,7 @@ class DocumentCanvasView @JvmOverloads constructor(
         painter.clearCaches()
         handle = null
         textLayouts.clear()
+        clearSearchMarks()
         viewport.layout = null
         pendingViewState = null
         annotations = DocumentAnnotations.EMPTY
@@ -659,7 +735,7 @@ class DocumentCanvasView @JvmOverloads constructor(
         viewport.scaling = false
     }
 
-    private fun animateScrollTo(targetY: Float) {
+    private fun animateScrollTo(targetY: Float, targetX: Float = viewport.scrollX) {
         val layout = viewport.layout ?: return
         stopMotion()
         val visible = layout.viewHeight
@@ -670,11 +746,12 @@ class DocumentCanvasView @JvmOverloads constructor(
             setScroll(viewport.scrollX, startY)
             startY = viewport.scrollY
         }
-        if (startY == targetY) return
+        val startX = viewport.scrollX
+        if (startY == targetY && startX == targetX) return
         animatingScrollTarget = targetY
-        val from = startY
+        val fromY = startY
         startAnimator(SCROLL_ANIMATION_MS) { f ->
-            setScroll(viewport.scrollX, from + (targetY - from) * f)
+            setScroll(startX + (targetX - startX) * f, fromY + (targetY - fromY) * f)
         }
     }
 
@@ -794,12 +871,15 @@ class DocumentCanvasView @JvmOverloads constructor(
         val hasLive = mode == Mode.INK && livePage == page && livePoints.pointCount > 0
         val hasOverlay = hasLive || hasPendingOn(page) || (dragNote != null && dragPage == page) ||
             notePreviews.isNotEmpty()
-        if (pageAnn.isEmpty && !hasOverlay) return
+        val hasSearchHits = hitsByPage[page] != null
+        if (pageAnn.isEmpty && !hasOverlay && !hasSearchHits) return
         val scale = layout.pxPerPt(page, viewport.zoom)
         val save = canvas.save()
         canvas.clipRect(left, top, right, bottom)
         canvas.translate(left, top)
         canvas.scale(scale, scale)
+        // Under the marks the user made, so a highlight over a hit still reads as a highlight.
+        if (hasSearchHits) drawSearchMarks(canvas, page, scale)
         val customNotes = notesVisible && (dragNote != null || notePreviews.isNotEmpty())
         painter.drawPage(canvas, pageAnn, scale, notesVisible && !customNotes, hiddenStrokeIds)
         for (i in 0 until pendingStrokes.size) {
@@ -836,6 +916,151 @@ class DocumentCanvasView @JvmOverloads constructor(
         for (i in 0 until pendingStrokes.size) if (pendingStrokes[i].page == page) return true
         for (i in 0 until awaitingSnap.size) if (awaitingSnap[i].page == page) return true
         return false
+    }
+
+    // ---- Search marks ------------------------------------------------------------------------
+
+    /** Draws [page]'s search marks (canvas already in page points): every hit faintly, the current one strongly. */
+    private fun drawSearchMarks(canvas: Canvas, page: Int, scale: Float) {
+        val marks = searchMarksFor(page) ?: return
+        val r = SEARCH_MARK_RADIUS_PT
+        for (i in 0 until marks.size / 4) {
+            canvas.drawRoundRect(marks[4 * i], marks[4 * i + 1], marks[4 * i + 2], marks[4 * i + 3], r, r, searchMarkPaint)
+        }
+        val current = currentMarksFor(page) ?: return
+        currentMarkOutlinePaint.strokeWidth = CURRENT_MARK_OUTLINE_DP * density / scale
+        for (i in 0 until current.size / 4) {
+            canvas.drawRoundRect(current[4 * i], current[4 * i + 1], current[4 * i + 2], current[4 * i + 3], r, r, currentMarkPaint)
+            canvas.drawRoundRect(current[4 * i], current[4 * i + 1], current[4 * i + 2], current[4 * i + 3], r, r, currentMarkOutlinePaint)
+        }
+    }
+
+    /**
+     * The marks of [page]'s hits: computed (once per page and query) from its text when that is
+     * known, else requested in the background and null for now. Null too for a page without hits.
+     */
+    private fun searchMarksFor(page: Int): FloatArray? {
+        val pageHits = hitsByPage[page] ?: return null
+        searchMarks[page]?.let { return it }
+        val text = textLayouts[page]
+        if (text == null) {
+            requestSearchText(page)
+            return null
+        }
+        val boxes = ArrayList<Float>()
+        for (hit in pageHits) appendMarks(text, hit, boxes)
+        val marks = boxes.toFloatArray()
+        searchMarks.put(page, marks)
+        return marks
+    }
+
+    /** The current hit's marks when it is on [page] and the page's text is known, else null. */
+    private fun currentMarksFor(page: Int): FloatArray? {
+        val hit = searchHits.getOrNull(searchCurrent) ?: return null
+        if (hit.page != page) return null
+        if (currentMarksPage == page) return currentMarks
+        val text = textLayouts[page] ?: return null
+        val marks = marksOf(text, hit)
+        currentMarks = marks
+        currentMarksPage = page
+        return marks
+    }
+
+    /** [hit]'s boxes on its page, interleaved l, t, r, b per line, with a little breathing room around the text. */
+    private fun marksOf(text: PageTextLayout, hit: SearchHit): FloatArray {
+        val out = ArrayList<Float>()
+        appendMarks(text, hit, out)
+        return out.toFloatArray()
+    }
+
+    private fun appendMarks(text: PageTextLayout, hit: SearchHit, into: ArrayList<Float>) {
+        for (b in text.boxesOf(hit.start, hit.end)) {
+            into += b.left - SEARCH_MARK_PAD_PT
+            into += b.top - SEARCH_MARK_PAD_PT / 2f
+            into += b.right + SEARCH_MARK_PAD_PT
+            into += b.bottom + SEARCH_MARK_PAD_PT / 2f
+        }
+    }
+
+    /** Reads [page]'s text once so its marks can be drawn; a page whose text can't be read gets no marks. */
+    private fun requestSearchText(page: Int) {
+        val h = handle ?: return
+        if (!searchTextRequests.add(page)) return
+        val scope = inkScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main).also { inkScope = it }
+        scope.launch {
+            try {
+                val loaded = loadTextLayout(h, page)
+                if (h !== handle) return@launch
+                // Nothing to mark: remember that, or every frame would ask again.
+                if (loaded == null && hitsByPage[page] != null) searchMarks.put(page, FloatArray(0))
+                invalidate()
+            } finally {
+                searchTextRequests.remove(page)
+            }
+        }
+    }
+
+    /**
+     * Scrolls so [marks] (page points on [page]) sit in the unobscured part of the view when they
+     * are not already there (a hit on screen does not move the page). Without marks, the page's
+     * top is scrolled to when the page is off screen.
+     */
+    private fun scrollToMarks(page: Int, marks: FloatArray) {
+        val layout = viewport.layout ?: return
+        if (!layout.isConfigured) return
+        if (marks.isEmpty()) {
+            if (!isPageInView(page)) scrollToPage(page)
+            return
+        }
+        var l = Float.POSITIVE_INFINITY
+        var t = Float.POSITIVE_INFINITY
+        var r = Float.NEGATIVE_INFINITY
+        var b = Float.NEGATIVE_INFINITY
+        for (i in 0 until marks.size / 4) {
+            l = min(l, marks[4 * i])
+            t = min(t, marks[4 * i + 1])
+            r = max(r, marks[4 * i + 2])
+            b = max(b, marks[4 * i + 3])
+        }
+        val zoom = viewport.zoom
+        val scale = layout.pxPerPt(page, zoom)
+        // Content coordinates of the hit.
+        val top = layout.pageTop(page, zoom) + t * scale
+        val bottom = layout.pageTop(page, zoom) + b * scale
+        val left = layout.pageLeft() + l * scale
+        val right = layout.pageLeft() + r * scale
+        val margin = SEARCH_VIEW_MARGIN_DP * density
+        val bandTop = contentPaddingTop + margin
+        val bandBottom = height - contentPaddingBottom - margin
+        var targetY = viewport.scrollY
+        if (top < viewport.scrollY + bandTop || bottom > viewport.scrollY + bandBottom) {
+            targetY = (top + bottom) / 2f - (contentPaddingTop + (height - contentPaddingTop - contentPaddingBottom) / 2f)
+        }
+        var targetX = viewport.scrollX
+        if (left < viewport.scrollX + margin || right > viewport.scrollX + width - margin) {
+            targetX = (left + right) / 2f - width / 2f
+        }
+        animateScrollTo(layout.clampScrollY(targetY, zoom), layout.clampScrollX(targetX, zoom))
+    }
+
+    /** Whether any part of [page] lies in the part of the view the toolbars don't cover. */
+    private fun isPageInView(page: Int): Boolean {
+        val layout = viewport.layout ?: return false
+        if (!layout.isConfigured) return false
+        val top = pageTopOnScreen(layout, page)
+        val bottom = top + layout.pageHeight(page, viewport.zoom)
+        return bottom > contentPaddingTop && top < height - contentPaddingBottom
+    }
+
+    private fun clearSearchMarks() {
+        searchShowSerial++
+        searchHits = emptyList()
+        searchCurrent = -1
+        hitsByPage.clear()
+        searchMarks.clear()
+        currentMarks = null
+        currentMarksPage = -1
+        searchTextRequests.clear()
     }
 
     /** Draws notes, moving the one being dragged (and recently moved ones) to their preview spot. */
@@ -2034,6 +2259,17 @@ class DocumentCanvasView @JvmOverloads constructor(
 
         /** Translucent grey-blue of the text-selection preview (over white: a light grey). */
         const val SELECTION_COLOR = 0x3D3C5A80
+
+        /** Search marks: the app's indigo, faint for every hit and stronger (plus an outline) for the current one. */
+        const val SEARCH_MARK_COLOR = 0x2E4052B5
+        const val CURRENT_MARK_COLOR = 0x5C4052B5
+        const val CURRENT_MARK_OUTLINE_COLOR = 0xFF4052B5.toInt()
+        const val CURRENT_MARK_OUTLINE_DP = 1.5f
+        const val SEARCH_MARK_RADIUS_PT = 2f
+        const val SEARCH_MARK_PAD_PT = 1.5f
+
+        /** A hit this close (dp) to the edge of the unobscured view still counts as out of view. */
+        const val SEARCH_VIEW_MARGIN_DP = 32f
 
         const val PREDICTION_NANOS = 16_000_000L
         const val MAX_PREDICTED_SAMPLES = 4

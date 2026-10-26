@@ -109,6 +109,14 @@ Contract in the file. Verified platform facts (see research notes):
   (vertical overlap ≥ half the smaller height; a line the engine did not split still comes out as
   two) and sorted along the line. Orientation (`isVertical`) is a vote over lines with several
   words. A dense page takes a moment (one quick selection per word); the result is immutable.
+- Text content (MODERN only), `PdfDocumentHandle.pageText(page)`: the engine's page text (one
+  `getTextContents()` call, no words measured), cached per page. Its character indices are the
+  ones `textLayout`'s words index into. Find in document reads it for every page, so a 300-page
+  book is searched in a few seconds; the word geometry is read only for pages whose hits are
+  drawn or shown. `TextSearch.find(text, query)` (`pdf/TextSearch.kt`): case-insensitive, any
+  whitespace run matches any whitespace run (a phrase broken across a line is found), ligatures
+  (ﬁ, ﬂ, ﬀ, ﬃ, ﬄ, ﬅ, ﬆ) match their letters, hits never overlap. `PageTextLayout.boxesOf(start, end)`:
+  the boxes of a character range, one per line, a partly covered word in proportion to its characters.
 - `PageTextLayout.select(start, end, previousEndLine)`: pure geometry, deterministic, instant. The
   start must lie on a line (its band within 0.6 × its height); the end goes to the nearest line
   (horizontal distance counts a quarter, so the column under the pen wins). On one line: the words
@@ -243,6 +251,14 @@ Determine tool type from `MotionEvent.getToolType(pointerIndex)`.
   snap-to-text result (the editor calls it before undo, redo, save, export and leaving), and
   `setSideInsets(leftPx, rightPx)` lays fit-width pages out between a side navigation bar / cutout
   while the view itself stays full-screen.
+- **Search marks** (internal additions): `setSearchHits(hits, currentIndex)` marks the find-in-
+  document hits on their pages, drawn under the user's marks in a faint indigo (the current hit
+  stronger, with a 1.5 dp outline), rounded, 1.5 pt of breathing room. A page's marks need its
+  `PageTextLayout` (`boxesOf`): taken from the canvas cache, else read once in the background the
+  first time the page is drawn (a page whose text can't be read gets no marks). `showSearchHit(hit)`
+  scrolls (animated, x and y) so the hit sits centred in the part of the view the toolbars don't
+  cover, unless it is already there (32 dp margin); when the page's text isn't known yet, an
+  off-screen page is scrolled to first and the scroll refined once the text arrives.
 - Memory: the view registers `ComponentCallbacks2` while attached; UI hidden drops tiles and trims
   base bitmaps, TRIM_MEMORY_BACKGROUND drops every bitmap; rendering resumes when visible again. When
   the visible pages' base bitmaps don't fit the cache together they are rendered at a reduced scale.
@@ -413,7 +429,28 @@ write once the document has moved.
   The first stylus touch (onStylusDetected) while in View switches to the Highlighter.
 - Keyboard / pen-remote paging: PAGE_DOWN, PAGE_UP, DPAD_DOWN/UP (and DPAD_RIGHT/LEFT) ->
   `canvas.scrollByScreens(±0.9)` via `Modifier.onPreviewKeyEvent` on the editor root (not while a
-  text field has focus).
+  text field has focus). Ctrl+F opens Find in document, F3 / Shift+F3 step through its hits.
+
+### Find in document
+- `EditorViewModel.search: StateFlow<SearchState>` (`editor/DocumentSearch.kt`): `active`, `query`,
+  `hits` (document order), `current`, `searching`, `showSerial`. `openSearch()` (🔍 in the top bar,
+  ⋮ → Find in document… on narrow bars, Ctrl+F) opens the bar and re-runs a query left from last
+  time; on a LEGACY-renderer device it stays closed and a snackbar says search needs Android 15 or
+  Android 12–14 with a current Play system update. `closeSearch()` (✕, Back, Escape) clears the
+  hits and keeps the query.
+- `setSearchQuery` starts a search 250 ms after typing pauses (at once on open), unless the
+  normalised query is the one already searched. The search runs in `viewModelScope`: pages in
+  `SearchResults.pageOrder` (the current page to the end, then the start up to it), `pageText` +
+  `TextSearch.find` per page, hits published after every page with a hit. The first hit found is
+  shown at once (`showSerial` bump); after that the hit being shown keeps its identity while hits
+  on earlier pages slot in before it. Next / Previous (▲ ▼, Enter / Shift+Enter, F3 / Shift+F3)
+  wrap round and bump `showSerial`; the screen reacts with `canvas.showSearchHit(currentHit)`.
+- The bar (`editor/ui/SearchBar.kt`) unfolds under the top bar's row inside the same surface, so
+  the canvas's top padding grows with it: pill field (takes focus and the keyboard when it
+  appears), "3 of 12" / "No matches" with a spinner while pages are still being searched, ▲ ▼ ✕.
+  While the field has focus the editor's root key handler stands back, so arrows and Ctrl+Z edit
+  the query. The canvas's bottom padding also covers the on-screen keyboard, so a found word is
+  brought into view above it.
 
 ### Saving
 - `save(reason)`: snapshot annotations + `canvas.currentViewState()` → `AnnotationStore.save` with
@@ -439,8 +476,9 @@ write once the document has moved.
 - Canvas fills the screen edge-to-edge behind system bars; neutral backdrop
   (`EditorColors.CanvasLight/Dark`).
 - **Top bar** (translucent surface, 56–64 dp): ← back, title (1 line, ellipsized) + status line,
-  spacer, Undo, Redo, Save button, ⋮ overflow (Go to page…, Show/Hide notes, Export annotated PDF…,
-  Share annotated PDF, "Draw with finger" checkbox item).
+  spacer, Find, Undo, Redo, Save button, ⋮ overflow (Go to page…, Show/Hide notes, Export annotated PDF…,
+  Share annotated PDF, "Draw with finger" checkbox item). Below 480 dp Find and Redo move into
+  the overflow menu. The find bar unfolds under the row while search is open.
 - **Tool pill**: floating, bottom-centre, 8–12 dp above the navigation bar, rounded 28 dp, tonal
   surface, elevation. Buttons (48 dp touch targets): View (hand), Highlighter, Pen, Note, Eraser.
   Selected tool has a filled tonal background; ink tools show a small colour dot of the current colour.
@@ -483,8 +521,8 @@ write once the document has moved.
 - Main thread never does file IO, PDF rendering, JSON or DOCX work.
 - Every user-visible failure becomes a short, human message (no stack traces).
 - Release build uses R8; keep reflection-free code; PdfBox rules in `proguard-rules.pro`.
-- Unit tests (JVM) for pure logic: JSON, geometry (simplify, hit-test, straighten, snapped strokes), text layout (line/word splitting, grouping, selection),
-  undo stack, export coordinate transforms, DOCX parsing (with kxml2 on the test classpath).
+- Unit tests (JVM) for pure logic: JSON, geometry (simplify, hit-test, straighten, snapped strokes), text layout (line/word splitting, grouping, selection, hit boxes),
+  text search (matching, result order, the find bar's count text), undo stack, export coordinate transforms, DOCX parsing (with kxml2 on the test classpath).
 - Instrumented tests (`app/src/androidTest`, fixtures in its `assets/`): canvas gestures with real
   MotionEvents (stylus/finger routing, palm guard, cancel, eraser, notes, finger drawing, zoom, snap),
   `PdfDocumentHandle` on every fixture, DOCX conversion and the rendition manager, and export

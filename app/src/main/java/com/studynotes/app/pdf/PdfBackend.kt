@@ -55,6 +55,13 @@ internal interface BackendPage : AutoCloseable {
      */
     fun textLayout(): PageTextLayout
 
+    /**
+     * The page's text as the engine extracts it; the words of [textLayout] index into it. One
+     * quick engine call (no words are measured), so a whole document can be searched. Only called
+     * when [PdfBackend.supportsTextSelection] is true; empty when the page has no text.
+     */
+    fun text(): String
+
     override fun close()
 }
 
@@ -77,6 +84,8 @@ internal class LegacyBackend(descriptor: ParcelFileDescriptor) : PdfBackend {
             page.render(bitmap, null, transform, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
         override fun textLayout(): PageTextLayout = PageTextLayout(emptyList())
+
+        override fun text(): String = ""
 
         override fun close() = page.close()
     }
@@ -114,8 +123,10 @@ internal class ModernBackend(descriptor: ParcelFileDescriptor) : PdfBackend {
          * text splits into the engine's lines at its line breaks; words are then grouped into lines
          * by their boxes, so a line the engine did not split still comes out as two.
          */
+        override fun text(): String = page.textContents.joinToString("") { it.text }
+
         override fun textLayout(): PageTextLayout {
-            val text = page.textContents.joinToString("") { it.text }
+            val text = text()
             val engineLines = ArrayList<List<TextWord>>()
             for (range in TextLayoutBuilder.lineRanges(text)) {
                 val words = ArrayList<TextWord>()

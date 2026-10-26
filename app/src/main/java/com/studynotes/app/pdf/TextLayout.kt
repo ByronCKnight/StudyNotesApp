@@ -101,6 +101,32 @@ internal class PageTextLayout(lines: List<TextLine>) {
     }
 
     /**
+     * Where the text from character [start] until [end] (stop exclusive; indices into the page
+     * text the layout was built from, as a [TextSearch] hit) lies on the page: one box per line in
+     * reading order, each the line's full height across the words the range touches. A word the
+     * range only partly covers contributes that part of its box, in proportion to its characters,
+     * so a hit inside a longer word is marked where it is. Empty when no measured word is in range.
+     */
+    fun boxesOf(start: Int, end: Int): List<TextBox> {
+        if (end <= start) return emptyList()
+        val out = ArrayList<TextBox>()
+        for (row in rows) {
+            var left = Float.POSITIVE_INFINITY
+            var right = Float.NEGATIVE_INFINITY
+            for (w in row.words) {
+                if (w.until <= start || w.from >= end || w.until <= w.from) continue
+                val length = (w.until - w.from).toFloat()
+                val f0 = (start - w.from).coerceAtLeast(0) / length
+                val f1 = (end - w.from).coerceAtMost(w.until - w.from) / length
+                left = minOf(left, w.box.left + w.box.width * f0)
+                right = maxOf(right, w.box.left + w.box.width * f1)
+            }
+            if (right > left) out += TextBox(left, row.box.top, right, row.box.bottom)
+        }
+        return if (isVertical) out.map { transpose(it) } else out
+    }
+
+    /**
      * The line nearest to a point: its band (top..bottom) must be within [slack] × its height of
      * [y]; among those, the one closest to the point, horizontal distance counting a quarter (so
      * the column under the pen wins, but a point in the margin still finds the line beside it).

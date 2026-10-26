@@ -1,10 +1,13 @@
 package com.studynotes.app.editor.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -31,6 +34,7 @@ import androidx.compose.material.icons.rounded.FindInPage
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.SaveAs
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.Visibility
@@ -92,6 +96,7 @@ interface TopBarActions {
     fun onUndo()
     fun onRedo()
     fun onSave()
+    fun onFind()
     fun onGoToPage()
     fun onToggleNotes()
     fun onShare()
@@ -100,12 +105,19 @@ interface TopBarActions {
 }
 
 /**
- * Slim translucent bar over the top of the canvas: back, title + save status, undo, redo, Save and
- * an overflow menu for the less frequent actions. On narrow windows (phones) Redo moves into the
- * overflow menu and Save gets tighter padding, so the title stays readable.
+ * Slim translucent bar over the top of the canvas: back, title + save status, find, undo, redo,
+ * Save and an overflow menu for the less frequent actions. On narrow windows (phones) Find and
+ * Redo move into the overflow menu and Save gets tighter padding, so the title stays readable.
+ * While [search] is given, the find bar ([DocumentSearchBar]) unfolds underneath.
  */
 @Composable
-fun EditorTopBar(state: TopBarState, actions: TopBarActions, modifier: Modifier = Modifier) {
+fun EditorTopBar(
+    state: TopBarState,
+    actions: TopBarActions,
+    modifier: Modifier = Modifier,
+    search: SearchBarState? = null,
+    searchActions: SearchBarActions? = null,
+) {
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.94f),
@@ -113,10 +125,24 @@ fun EditorTopBar(state: TopBarState, actions: TopBarActions, modifier: Modifier 
         contentColor = MaterialTheme.colorScheme.onSurface,
         shadowElevation = 2.dp,
     ) {
-        BoxWithConstraints(
+        Column(
             Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
         ) {
-            TopBarRow(state, actions, compact = maxWidth < CompactBarWidth, tiny = maxWidth < TinyBarWidth)
+            BoxWithConstraints {
+                TopBarRow(state, actions, compact = maxWidth < CompactBarWidth, tiny = maxWidth < TinyBarWidth)
+            }
+            // The last state is kept (plain holder, no snapshot write during composition) so the
+            // row can animate out with its contents.
+            val lastSearch = remember { LastSearch() }
+            if (search != null) lastSearch.value = search
+            val shown = lastSearch.value
+            AnimatedVisibility(
+                visible = search != null && searchActions != null,
+                enter = expandVertically(tween(180)) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(150)) + fadeOut(tween(100)),
+            ) {
+                if (shown != null && searchActions != null) DocumentSearchBar(shown, searchActions)
+            }
         }
     }
 }
@@ -151,6 +177,7 @@ private fun TopBarRow(state: TopBarState, actions: TopBarActions, compact: Boole
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        if (!compact) BarIconButton(Icons.Rounded.Search, "Find in document", onClick = actions::onFind)
         BarIconButton(Icons.AutoMirrored.Rounded.Undo, "Undo", enabled = state.canUndo, onClick = actions::onUndo)
         if (!compact) {
             BarIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", enabled = state.canRedo, onClick = actions::onRedo)
@@ -164,18 +191,23 @@ private fun TopBarRow(state: TopBarState, actions: TopBarActions, compact: Boole
             iconOnly = tiny,
             onClick = actions::onSave,
         )
-        OverflowMenu(state, actions, showRedo = compact)
+        OverflowMenu(state, actions, compact = compact)
     }
 }
 
-/** Below this width the bar drops Redo into the overflow menu. */
+/** The find bar state last shown, kept while the bar animates out. */
+private class LastSearch {
+    var value: SearchBarState? = null
+}
+
+/** Below this width the bar drops Find and Redo into the overflow menu. */
 private val CompactBarWidth = 480.dp
 
 /** Below this width (small phones) Save shows only its icon, so the title stays readable. */
 private val TinyBarWidth = 360.dp
 
 @Composable
-private fun BarIconButton(icon: ImageVector, label: String, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun BarIconButton(icon: ImageVector, label: String, enabled: Boolean = true, onClick: () -> Unit) {
     Tooltipped(label) {
         IconButton(onClick = onClick, enabled = enabled) {
             Icon(icon, contentDescription = label)
@@ -253,13 +285,14 @@ private fun SaveButton(
 
 private enum class SavePhase { IDLE, SAVING, DONE }
 
+/** [compact]: the bar has no room for Find and Redo, so the menu carries them. */
 @Composable
-private fun OverflowMenu(state: TopBarState, actions: TopBarActions, showRedo: Boolean) {
+private fun OverflowMenu(state: TopBarState, actions: TopBarActions, compact: Boolean) {
     var open by remember { mutableStateOf(false) }
     Box {
         BarIconButton(Icons.Rounded.MoreVert, "More options") { open = true }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            if (showRedo) {
+            if (compact) {
                 DropdownMenuItem(
                     text = { Text("Redo") },
                     leadingIcon = { Icon(Icons.AutoMirrored.Rounded.Redo, contentDescription = null) },
@@ -267,6 +300,7 @@ private fun OverflowMenu(state: TopBarState, actions: TopBarActions, showRedo: B
                     onClick = { open = false; actions.onRedo() },
                 )
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                MenuItem("Find in document…", Icons.Rounded.Search) { open = false; actions.onFind() }
             }
             MenuItem("Go to page…", Icons.Rounded.FindInPage) { open = false; actions.onGoToPage() }
             MenuItem(
