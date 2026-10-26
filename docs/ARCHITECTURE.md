@@ -433,21 +433,22 @@ write once the document has moved.
 
 ### Find in document
 - `EditorViewModel.search: StateFlow<SearchState>` (`editor/DocumentSearch.kt`): `active`, `query`,
-  `hits` (document order), `current`, `searching`, `showSerial`. `openSearch()` (🔍 in the top bar,
-  ⋮ → Find in document… on narrow bars, Ctrl+F) opens the bar and re-runs a query left from last
+  `hits` (document order), `current`, `searching`, `showSerial`. `openSearch()` (the Search icon in
+  the top bar, ⋮ → Find in document… on narrow bars, Ctrl+F) opens the bar and re-runs a query left from last
   time; on a LEGACY-renderer device it stays closed and a snackbar says search needs Android 15 or
-  Android 12–14 with a current Play system update. `closeSearch()` (✕, Back, Escape) clears the
+  Android 12–14 with a current Play system update. `closeSearch()` (the Close button, Back, Escape) clears the
   hits and keeps the query.
 - `setSearchQuery` starts a search 250 ms after typing pauses (at once on open), unless the
   normalised query is the one already searched. The search runs in `viewModelScope`: pages in
   `SearchResults.pageOrder` (the current page to the end, then the start up to it), `pageText` +
   `TextSearch.find` per page, hits published after every page with a hit. The first hit found is
   shown at once (`showSerial` bump); after that the hit being shown keeps its identity while hits
-  on earlier pages slot in before it. Next / Previous (▲ ▼, Enter / Shift+Enter, F3 / Shift+F3)
+  on earlier pages slot in before it. Next / Previous (the arrow buttons, Enter / Shift+Enter, F3 / Shift+F3)
   wrap round and bump `showSerial`; the screen reacts with `canvas.showSearchHit(currentHit)`.
 - The bar (`editor/ui/SearchBar.kt`) unfolds under the top bar's row inside the same surface, so
   the canvas's top padding grows with it: pill field (takes focus and the keyboard when it
-  appears), "3 of 12" / "No matches" with a spinner while pages are still being searched, ▲ ▼ ✕.
+  appears), "3 of 12" / "No matches" with a spinner while pages are still being searched, then
+  Previous, Next and Close icon buttons (Material `KeyboardArrowUp`, `KeyboardArrowDown`, `Close`).
   While the field has focus the editor's root key handler stands back, so arrows and Ctrl+Z edit
   the query. The canvas's bottom padding also covers the on-screen keyboard, so a found word is
   brought into view above it.

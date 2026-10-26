@@ -36,9 +36,9 @@ Your highlights and notes are stored next to the documents in a hidden `.studyno
 
 Tap a selected tool again for its colours and sizes.
 
-- **Find in document:** tap 🔍 in the top bar (on a phone, ⋮ → **Find in document…**) and type a
-  word or phrase. Every match is marked on the pages and the nearest one ahead of you is shown;
-  ▲ ▼ (or Enter) step through them, and the bar counts "3 of 12". Capitals don't matter, and a
+- **Find in document:** tap the search icon in the top bar (on a phone, ⋮ → **Find in document…**)
+  and type a word or phrase. Every match is marked on the pages and the nearest one ahead of you
+  is shown; the up and down arrows (or Enter) step through them, and the bar counts "3 of 12". Capitals don't matter, and a
   phrase is found even where it breaks across a line. On a hardware keyboard, Ctrl+F opens the
   bar and F3 / Shift+F3 step through the matches.
 - **Pen vs finger:** the first time you touch the screen with a stylus, StudyNotes switches to
