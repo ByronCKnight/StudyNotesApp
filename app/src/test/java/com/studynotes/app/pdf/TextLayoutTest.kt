@@ -151,6 +151,81 @@ class TextLayoutTest {
         assertNull(PageTextLayout(emptyList()).select(10f, 10f, 20f, 20f))
     }
 
+    // ---- Search hit boxes ----
+
+    /** The same page with page-wide character offsets: "Chapter 1: Photosynthesis\nPlants make sugar\nfrom light". */
+    private val pageLayout: PageTextLayout = run {
+        var at = 0
+        fun line(top: Float, bottom: Float, vararg words: Pair<String, Pair<Float, Float>>): TextLine {
+            val list = words.map { (text, x) ->
+                TextWord(TextBox(x.first, top, x.second, bottom), at, at + text.length).also { at += text.length + 1 }
+            }
+            return TextLine(list.map { it.box }.reduce(TextBox::union), list)
+        }
+        PageTextLayout(
+            listOf(
+                line(100f, 112f, "Chapter" to (56f to 130f), "1:" to (135f to 150f), "Photosynthesis" to (156f to 291f)),
+                line(130f, 142f, "Plants" to (56f to 90f), "make" to (95f to 125f), "sugar" to (130f to 160f)),
+                line(146f, 158f, "from" to (56f to 80f), "light" to (85f to 110f)),
+            ),
+        )
+    }
+
+    @Test
+    fun boxesOf_wholeWords_spanThemAtTheLineHeight() {
+        // "make sugar" on line 2.
+        assertEquals(listOf(TextBox(95f, 130f, 160f, 142f)), pageLayout.boxesOf(33, 43))
+        // "Photosynthesis" alone.
+        assertEquals(listOf(TextBox(156f, 100f, 291f, 112f)), pageLayout.boxesOf(11, 25))
+    }
+
+    @Test
+    fun boxesOf_partOfAWord_isMarkedInProportion() {
+        // "Plant" within "Plants" (26..31 of 26..32): 5/6 of the word's 34 pt width.
+        val box = pageLayout.boxesOf(26, 31).single()
+        assertEquals(56f, box.left, 1e-4f)
+        assertEquals(56f + 34f * 5f / 6f, box.right, 1e-4f)
+        // "ake" within "make" (34..37 of 33..37): the last three quarters.
+        val tail = pageLayout.boxesOf(34, 37).single()
+        assertEquals(95f + 30f / 4f, tail.left, 1e-4f)
+        assertEquals(125f, tail.right, 1e-4f)
+    }
+
+    @Test
+    fun boxesOf_acrossLines_givesOneBoxPerLine() {
+        // "sugar from": the end of line 2 and the start of line 3.
+        assertEquals(
+            listOf(TextBox(130f, 130f, 160f, 142f), TextBox(56f, 146f, 80f, 158f)),
+            pageLayout.boxesOf(38, 48),
+        )
+    }
+
+    @Test
+    fun boxesOf_outsideAnyWord_isEmpty() {
+        assertTrue(pageLayout.boxesOf(25, 26).isEmpty()) // the line break
+        assertTrue(pageLayout.boxesOf(200, 210).isEmpty())
+        assertTrue(pageLayout.boxesOf(10, 10).isEmpty())
+        assertTrue(pageLayout.boxesOf(10, 5).isEmpty())
+        assertTrue(PageTextLayout(emptyList()).boxesOf(0, 3).isEmpty())
+    }
+
+    @Test
+    fun boxesOf_verticalText_runsAlongTheLine() {
+        val vertical = PageTextLayout(
+            listOf(
+                TextLine(TextBox(766f, 56f, 786f, 330f), listOf(TextWord(TextBox(766f, 56f, 786f, 150f), 0, 7), TextWord(TextBox(766f, 160f, 786f, 330f), 8, 22))),
+                TextLine(TextBox(740f, 56f, 752f, 200f), listOf(TextWord(TextBox(740f, 56f, 752f, 200f), 23, 30))),
+            ),
+        )
+        // The whole first word: its box, the line's full width across.
+        assertEquals(listOf(TextBox(766f, 56f, 786f, 150f)), vertical.boxesOf(0, 7))
+        // The second half of the second word (14 characters, 170 pt tall).
+        val half = vertical.boxesOf(15, 22).single()
+        assertEquals(766f, half.left, 1e-4f)
+        assertEquals(160f + 170f / 2f, half.top, 1e-4f)
+        assertEquals(330f, half.bottom, 1e-4f)
+    }
+
     private fun word(l: Float, t: Float, r: Float, b: Float) = TextWord(TextBox(l, t, r, b), 0, 1)
 
     private fun line(top: Float, bottom: Float, vararg words: Pair<String, Pair<Float, Float>>): TextLine {

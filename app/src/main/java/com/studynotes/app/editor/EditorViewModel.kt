@@ -32,6 +32,7 @@ import com.studynotes.app.model.ViewState
 import com.studynotes.app.model.newAnnotationId
 import com.studynotes.app.pdf.PdfDocumentHandle
 import com.studynotes.app.pdf.PdfOpenException
+import com.studynotes.app.pdf.TextSearch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -50,12 +51,15 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
 
 /** Lifecycle of opening the document. */
@@ -165,6 +169,10 @@ class EditorViewModel(
     private val _exporting = MutableStateFlow(false)
     val exporting: StateFlow<Boolean> = _exporting.asStateFlow()
 
+    /** Find in document: the bar, the query and its hits. */
+    private val _search = MutableStateFlow(SearchState())
+    val search: StateFlow<SearchState> = _search.asStateFlow()
+
     private val _events = Channel<EditorEvent>(Channel.BUFFERED)
     val events: Flow<EditorEvent> = _events.receiveAsFlow()
 
@@ -196,6 +204,10 @@ class EditorViewModel(
     private var viewStateProvider: (() -> ViewState?)? = null
     private var savedFlashJob: Job? = null
     private var exportJob: Job? = null
+    private var searchJob: Job? = null
+
+    /** The normalised query of the running or finished search, so retyping the same words doesn't restart it. */
+    private var searchedQuery: String? = null
 
     /** Latest text/colour typed in the open note editor, so it survives going to the background. */
     private var noteDraft: NoteDraft? = null
@@ -591,6 +603,98 @@ class EditorViewModel(
         viewModelScope.launch(Dispatchers.IO) { settings.update { it.copy(stylusOnly = !enabled) } }
     }
 
+    // ---------------------------------------------------------------- Find in document
+
+    /**
+     * Opens the find bar. A query left from the last time is searched again. On a device whose
+     * PDF renderer can't read text (see [PdfDocumentHandle.supportsTextSelection]) the bar stays
+     * closed and a message says why.
+     */
+    fun openSearch() {
+        val h = handle ?: return
+        if (_loadState.value !is LoadState.Ready) return
+        if (!h.supportsTextSelection) {
+            message(MSG_SEARCH_UNSUPPORTED, long = true)
+            return
+        }
+        if (_search.value.active) return
+        _search.update { it.copy(active = true) }
+        startSearch(_search.value.query, immediate = true)
+    }
+
+    /** Closes the find bar and removes the marks; the query is kept for next time. */
+    fun closeSearch() {
+        if (!_search.value.active) return
+        searchJob?.cancel()
+        searchJob = null
+        searchedQuery = null
+        _search.update { it.copy(active = false, hits = emptyList(), current = -1, searching = false) }
+    }
+
+    /** Every keystroke in the find bar. The search starts shortly after typing pauses. */
+    fun setSearchQuery(query: String) {
+        if (!_search.value.active) return
+        _search.update { it.copy(query = query) }
+        startSearch(query, immediate = false)
+    }
+
+    fun searchNext() = moveSearch(1)
+
+    fun searchPrevious() = moveSearch(-1)
+
+    /** Steps through the hits, wrapping round at either end, and asks for the new one to be shown. */
+    private fun moveSearch(step: Int) {
+        _search.update { s ->
+            if (s.hits.isEmpty()) return@update s
+            val next = if (s.current < 0) 0 else Math.floorMod(s.current + step, s.hits.size)
+            s.copy(current = next, showSerial = s.showSerial + 1)
+        }
+    }
+
+    private fun startSearch(query: String, immediate: Boolean) {
+        val normalized = TextSearch.normalizeQuery(query)
+        if (normalized == searchedQuery) return
+        searchJob?.cancel()
+        searchJob = null
+        searchedQuery = normalized
+        if (normalized.isEmpty()) {
+            _search.update { it.copy(hits = emptyList(), current = -1, searching = false) }
+            return
+        }
+        searchJob = viewModelScope.launch {
+            if (!immediate) delay(SEARCH_DEBOUNCE_MS)
+            runSearch(normalized)
+        }
+    }
+
+    /**
+     * Searches every page, from the current one round to it, publishing the hits as each page
+     * is done. The first hit found is shown at once; after that the hit being shown keeps its
+     * place as hits on earlier pages slot in before it.
+     */
+    private suspend fun runSearch(query: String) {
+        val h = handle ?: return
+        val results = SearchResults(h.pageCount, _currentPage.value)
+        _search.update { it.copy(hits = emptyList(), current = -1, searching = true) }
+        try {
+            for (page in results.pageOrder) {
+                val text = h.pageText(page) ?: continue
+                val ranges = TextSearch.find(text, query)
+                if (ranges.isEmpty()) continue
+                results.add(page, ranges)
+                _search.update { s ->
+                    val hits = results.hits
+                    val shown = s.currentHit
+                    val current = if (shown == null) results.firstHitIndex else hits.indexOf(shown).takeIf { it >= 0 } ?: results.firstHitIndex
+                    s.copy(hits = hits, current = current, showSerial = if (shown == null) s.showSerial + 1 else s.showSerial)
+                }
+            }
+        } finally {
+            // A cancelled search (the query changed) must not touch the state of the one replacing it.
+            if (coroutineContext.isActive) _search.update { it.copy(searching = false) }
+        }
+    }
+
     // ---------------------------------------------------------------- Saving
 
     /**
@@ -914,7 +1018,10 @@ class EditorViewModel(
             "Your saved highlights and notes for this document couldn't be read or backed up, so changes won't be saved over them."
         const val MSG_SOURCE_CHANGED = "This document changed since you annotated it; marks may be misaligned."
         const val MSG_EXPORT_FAILED = "Couldn't create the annotated PDF."
+        const val MSG_SEARCH_UNSUPPORTED =
+            "Search needs Android 15, or Android 12–14 with a current Google Play system update."
         const val SAVED_FLASH_MS = 1_500L
+        const val SEARCH_DEBOUNCE_MS = 250L
     }
 }
 

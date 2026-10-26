@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -73,6 +74,8 @@ import com.studynotes.app.editor.ui.NoteEditor
 import com.studynotes.app.editor.ui.NotesHiddenChip
 import com.studynotes.app.editor.ui.PageChip
 import com.studynotes.app.editor.ui.SaveChangesDialog
+import com.studynotes.app.editor.ui.SearchBarActions
+import com.studynotes.app.editor.ui.SearchBarState
 import com.studynotes.app.editor.ui.ToolPill
 import com.studynotes.app.editor.ui.TopBarActions
 import com.studynotes.app.editor.ui.TopBarState
@@ -115,10 +118,15 @@ fun EditorScreen(
     }
 
     val loadState by vm.loadState.collectAsStateWithLifecycle()
+    val search by vm.search.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val canvas = remember { CanvasHolder() }
     val rootFocus = remember { FocusRequester() }
     var showSaveDialog by remember { mutableStateOf(false) }
+
+    // While the find bar's field has the keyboard focus, the editor's shortcuts leave the keys to it.
+    var searchFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(search.active) { if (!search.active) searchFocused = false }
 
     // Events are handled only while the screen is visible: a share sheet started from a stopped
     // activity is silently blocked, and snackbars would time out unseen. The channel buffers
@@ -169,7 +177,7 @@ fun EditorScreen(
         Modifier
             .fillMaxSize()
             .background(backdrop)
-            .onPreviewKeyEvent { event -> handleKey(event, canvas.view, vm) }
+            .onPreviewKeyEvent { event -> if (searchFocused) false else handleKey(event, canvas.view, vm) }
             .focusRequester(rootFocus)
             .focusTarget(),
     ) {
@@ -180,10 +188,12 @@ fun EditorScreen(
             is LoadState.Ready -> ReadyEditor(
                 vm = vm,
                 ready = state,
+                search = search,
                 canvas = canvas,
                 backdropArgb = backdrop.toArgb(),
                 snackbar = snackbar,
                 onBack = onBack,
+                onSearchFocusChange = { searchFocused = it },
             )
         }
 
@@ -197,9 +207,10 @@ fun EditorScreen(
         }
     }
 
-    // Hardware keyboard / pen-remote paging needs a focused node in this window.
-    LaunchedEffect(loadState is LoadState.Ready) {
-        if (loadState is LoadState.Ready) rootFocus.requestFocus()
+    // Hardware keyboard / pen-remote paging needs a focused node in this window (again once the
+    // find bar, which took the focus, closes).
+    LaunchedEffect(loadState is LoadState.Ready, search.active) {
+        if (loadState is LoadState.Ready && !search.active) rootFocus.requestFocus()
     }
 
     if (showSaveDialog) {
@@ -223,10 +234,12 @@ fun EditorScreen(
 private fun ReadyEditor(
     vm: EditorViewModel,
     ready: LoadState.Ready,
+    search: SearchState,
     canvas: CanvasHolder,
     backdropArgb: Int,
     snackbar: SnackbarHostState,
     onBack: () -> Unit,
+    onSearchFocusChange: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -250,8 +263,12 @@ private fun ReadyEditor(
     val pageCount = ready.handle.pageCount
     val bottomInsets = WindowInsets.navigationBars.union(WindowInsets.displayCutout)
         .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
-    val bottomAreaPx = pillPx + bottomInsets.getBottom(density) + with(density) { (PillMargin + 8.dp).roundToPx() }
-    val bottomAreaDp = with(density) { bottomAreaPx.toDp() }
+    val pillAreaPx = pillPx + bottomInsets.getBottom(density) + with(density) { (PillMargin + 8.dp).roundToPx() }
+    // The on-screen keyboard (typing in the find bar) covers the bottom of the canvas too, so a
+    // found word is brought into view above it.
+    val imeAreaPx = WindowInsets.ime.getBottom(density) + with(density) { 8.dp.roundToPx() }
+    val bottomAreaPx = maxOf(pillAreaPx, imeAreaPx)
+    val bottomAreaDp = with(density) { pillAreaPx.toDp() }
     // Pages lay out between a side navigation bar / display cutout (landscape phones) while the
     // canvas itself, and so its backdrop and zoomed-in content, still reaches the screen edges.
     val layoutDirection = LocalLayoutDirection.current
@@ -306,8 +323,14 @@ private fun ReadyEditor(
                 view.setContentPadding(topBarPx, bottomAreaPx)
                 view.setSideInsets(sideInsetLeftPx, sideInsetRightPx)
                 view.setBackdropColor(backdropArgb)
+                view.setSearchHits(search.hits, search.current)
             },
         )
+
+        // The first hit found, Next and Previous each ask for the current hit to be shown.
+        LaunchedEffect(search.showSerial) {
+            if (search.showSerial > 0) search.currentHit?.let { hit -> canvas.view?.showSearchHit(hit) }
+        }
 
         EditorTopBar(
             state = TopBarState(
@@ -339,6 +362,7 @@ private fun ReadyEditor(
                     canvas.view?.commitPendingInk()
                     vm.saveNow()
                 }
+                override fun onFind() = vm.openSearch()
                 override fun onGoToPage() {
                     showGoToPage = true
                 }
@@ -360,6 +384,16 @@ private fun ReadyEditor(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .onSizeChanged { topBarPx = it.height },
+            search = if (search.active) SearchBarState(search.query, search.hits.size, search.current, search.searching) else null,
+            searchActions = remember(vm) {
+                object : SearchBarActions {
+                    override fun onQueryChange(query: String) = vm.setSearchQuery(query)
+                    override fun onNext() = vm.searchNext()
+                    override fun onPrevious() = vm.searchPrevious()
+                    override fun onClose() = vm.closeSearch()
+                    override fun onFocusChange(focused: Boolean) = onSearchFocusChange(focused)
+                }
+            },
         )
 
         Column(
@@ -460,8 +494,9 @@ private class CanvasCallbacks(private val vm: EditorViewModel, private val canva
 
 /**
  * Keyboard and pen-remote shortcuts: Page Up/Down and arrow keys page through the document;
- * Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo and redo; Ctrl+S saves. Text fields live in dialogs and sheets
- * (their own windows), so these never steal keys from typing.
+ * Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo and redo; Ctrl+S saves; Ctrl+F finds, F3 / Shift+F3 step
+ * through the hits. Text fields live in dialogs and sheets (their own windows), except the find
+ * bar's, which the caller checks for focus first, so these never steal keys from typing.
  */
 private fun handleKey(event: KeyEvent, view: DocumentCanvasView?, vm: EditorViewModel): Boolean {
     if (view == null || event.type != KeyEventType.KeyDown) return false
@@ -471,8 +506,13 @@ private fun handleKey(event: KeyEvent, view: DocumentCanvasView?, vm: EditorView
             Key.Z -> if (event.isShiftPressed) vm.redo() else vm.undo()
             Key.Y -> vm.redo()
             Key.S -> vm.saveNow()
+            Key.F -> vm.openSearch()
             else -> return false
         }
+        return true
+    }
+    if (event.key == Key.F3) {
+        if (event.isShiftPressed) vm.searchPrevious() else vm.searchNext()
         return true
     }
     val screens = when (event.key) {

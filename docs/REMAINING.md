@@ -28,6 +28,10 @@
      keyboard).
    - Also confirm *Snap to text* is offered. It needs Android 15, or Android 12–14 with the
      SDK extension 13 Play system update.
+   - *Find in document* (added after the QA pass above, built and unit-tested but not yet run on
+     a device): marks line up with the text, the current hit scrolls into view above the
+     on-screen keyboard, Next/Previous wrap, and the LEGACY renderer shows the "needs Android
+     15" message instead of the bar.
 2. **LEGACY renderer** (Android 8–11, or 12–14 without SDK extension 13): untested on a device.
    - It needs an emulator image of API 30–33. None is installed; it's a ~1 GB SDK download.
    - Run the app and `connectedDebugAndroidTest` there. `textSelection_legacy_isUnsupported`
